@@ -414,4 +414,13 @@
   });
 
   window.addEventListener('beforeunload', clearThumbUrls);
-})();
+})();async function setCondition(conditionText) {
+  const dropdown = document.querySelector(`[aria-label="Condition"]`) || document.querySelector(`[aria-label="Select Condition"]`);
+  if (!dropdown) return console.error("Dropdown not found");
+  dropdown.click();
+  setTimeout(() => {
+    const options = Array.from(document.querySelectorAll(`[role="option"], [role="menuitem"]`));
+    const target = options.find(el => el.textContent.toLowerCase().includes(conditionText.toLowerCase()));
+    if (target) target.click();
+  }, 500);
+}
