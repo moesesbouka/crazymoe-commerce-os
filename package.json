@@ -1,17 +1,12 @@
 {
-  "name": "crazymoe-commerce-os",
-  "private": true,
-  "version": "1.0.0",
-  "scripts": {
-    "lint": "eslint . --ext .js,.html",
-    "test": "playwright test",
-    "test:intake": "playwright test tests/intake.spec.js",
-    "test:hub": "playwright test tests/hub.spec.js"
-  },
-  "devDependencies": {
-    "@playwright/test": "^1.53.0",
-    "eslint": "^9.30.0",
-    "@html-eslint/eslint-plugin": "^0.35.0",
-    "@html-eslint/parser": "^0.35.0"
-  }
+    "devDependencies":  {
+                            "@playwright/test":  "^1.42.0",
+                            "eslint":  "^8.57.0"
+                        },
+    "name":  "crazymoe-commerce-os",
+    "version":  "1.0.0",
+    "scripts":  {
+                    "lint":  "eslint . --ext .js",
+                    "test":  "playwright test"
+                }
 }
