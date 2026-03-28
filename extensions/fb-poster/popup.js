@@ -1,64 +1,41 @@
-const $ = id => document.getElementById(id);
-
-function showToast(msg, type = 'ok') {
-  const t = $('toast');
-  t.textContent = msg;
-  t.className = `toast ${type}`;
-  t.style.display = 'block';
-  setTimeout(() => { t.style.display = 'none'; }, 2500);
-}
-
-function updatePill(url, key) {
-  const pill = $('sb-pill');
-  const ok = !!(url && key);
-  pill.textContent = ok ? 'Configured' : 'Not configured';
-  pill.className = `pill ${ok ? 'ok' : 'warn'}`;
-}
-
-async function testSupabase(url, key) {
-  const r = await fetch(`${url}/rest/v1/inventory_items?select=id&limit=1`, {
-    headers: {
-      apikey: key,
-      Authorization: `Bearer ${key}`,
-    },
-  });
-  if (!r.ok) throw new Error(`Supabase ${r.status}`);
-}
+const urlEl = document.getElementById('url');
+const keyEl = document.getElementById('key');
+const msgEl = document.getElementById('msg');
 
 chrome.runtime.sendMessage({ type: 'GET_CONFIG' }, cfg => {
   if (!cfg) return;
-  $('sb-url').value = cfg.supabaseUrl || '';
-  $('sb-key').value = cfg.supabaseKey || '';
-  $('source-mode').value = cfg.sourceMode || 'supabase';
-  updatePill(cfg.supabaseUrl, cfg.supabaseKey);
+  urlEl.value = cfg.supabase_url || '';
+  keyEl.value = cfg.supabase_key || '';
 });
 
-$('save').addEventListener('click', () => {
-  const url = $('sb-url').value.trim();
-  const key = $('sb-key').value.trim();
-  const mode = $('source-mode').value;
-  if (!url || !key) return showToast('Both URL and key are required', 'bad');
-  if (!url.startsWith('https://')) return showToast('URL must start with https://', 'bad');
+document.getElementById('save').addEventListener('click', () => {
   chrome.runtime.sendMessage({
     type: 'SET_CONFIG',
-    data: { supabaseUrl: url, supabaseKey: key, sourceMode: mode, autoAdvance: true, advanceDelay: 1500 }
+    supabase_url: urlEl.value.trim(),
+    supabase_key: keyEl.value.trim()
   }, () => {
-    updatePill(url, key);
-    showToast('Config saved ✓', 'ok');
+    msgEl.textContent = 'Saved';
   });
 });
 
-$('test').addEventListener('click', async () => {
-  const url = $('sb-url').value.trim();
-  const key = $('sb-key').value.trim();
-  if (!url || !key) return showToast('Enter URL + key first', 'bad');
+document.getElementById('test').addEventListener('click', async () => {
+  const url = urlEl.value.trim();
+  const key = keyEl.value.trim();
+
   try {
-    await testSupabase(url, key);
-    updatePill(url, key);
-    showToast('Connection OK', 'ok');
+    const res = await fetch(url + '/rest/v1/inventory_items?select=id&limit=1', {
+      headers: {
+        apikey: key,
+        Authorization: 'Bearer ' + key
+      }
+    });
+
+    if (res.ok) {
+      msgEl.textContent = 'Connection OK';
+    } else {
+      msgEl.textContent = 'Connection failed: ' + res.status;
+    }
   } catch (e) {
-    showToast(`Connection failed: ${e.message}`, 'bad');
+    msgEl.textContent = 'Connection failed';
   }
 });
-
-$('open').addEventListener('click', () => chrome.tabs.create({ url: 'https://www.facebook.com/marketplace/create/item' }));
