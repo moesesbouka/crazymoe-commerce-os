@@ -1,16 +1,18 @@
 name: Perfect Code Check
 on: [push]
 jobs:
-  lint-and-test:
+  test:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
+    container: mcr.microsoft.com/playwright:v1.42.1-focal
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with: { node-version: 18 }
       - name: Install Deps
         run: npm install
-      - name: Install Playwright
-        run: npx playwright install --with-deps
       - name: Run Background Tests
-        run: npm test
+        run: npx playwright test
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
