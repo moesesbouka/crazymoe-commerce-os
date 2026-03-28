@@ -1,16 +1,22 @@
 name: Perfect Code Check
 on: [push]
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 jobs:
   test:
-    timeout-minutes: 10
     runs-on: ubuntu-latest
-    container: mcr.microsoft.com/playwright:v1.42.1-focal
     steps:
       - uses: actions/checkout@v4
-      - name: Install and Test
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Install and Fix Permissions
         run: |
           npm install
-          npx playwright test
+          chmod +x ./node_modules/.bin/playwright
+          npx playwright install --with-deps
+      - name: Run Background Tests
+        run: npx playwright test
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
