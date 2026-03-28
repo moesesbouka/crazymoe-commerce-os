@@ -10,8 +10,7 @@ jobs:
         with: { node-version: 18 }
       - name: Install Deps
         run: npm install
+      - name: Install Playwright
+        run: npx playwright install --with-deps
       - name: Run Background Tests
-        run: npx playwright test
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: npm test
