@@ -1,0 +1,26 @@
+:root{--panel:rgba(18,22,31,.92);--panel2:rgba(255,255,255,.04);--border:rgba(255,255,255,.09);--text:#eef2ff;--muted:#a1abc5;--dim:#6d7690}
+#fb-auto-uploader-root{position:fixed;right:20px;bottom:20px;z-index:2147483647;font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--text)}
+#fb-auto-uploader-toggle{background:linear-gradient(135deg,#5b8cff,#3f72f0);color:#fff;border:none;border-radius:999px;padding:13px 17px;font-size:13px;font-weight:800;cursor:pointer}
+#fb-auto-uploader-panel{width:430px;max-height:84vh;overflow:auto;margin-top:10px;background:var(--panel);border:1px solid var(--border);border-radius:24px;padding:16px;box-shadow:0 20px 55px rgba(0,0,0,.5)}
+#fb-auto-uploader-panel.hidden{display:none}.fbau-brand{display:flex;gap:12px;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+.fbau-icon{width:40px;height:40px;border-radius:14px;background:linear-gradient(135deg,rgba(91,140,255,.95),rgba(91,140,255,.45));display:grid;place-items:center;font-weight:800}
+.fbau-title{font-size:15px;font-weight:800}.fbau-sub{font-size:12px;color:var(--muted);margin-top:2px}.fbau-card{background:var(--panel2);border:1px solid var(--border);border-radius:18px;padding:14px;margin:0 0 12px}
+.fbau-eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:var(--dim);font-weight:800;margin:0 0 10px}.fbau-grid{display:grid;gap:10px}.fbau-grid.two{grid-template-columns:1fr 1fr}
+.fbau-row{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:10px 12px;background:rgba(255,255,255,.03);border-radius:12px;border:1px solid rgba(255,255,255,.05);font-size:13px}
+.fbau-pill{display:inline-flex;align-items:center;border-radius:999px;padding:6px 10px;font-size:11px;font-weight:800}.fbau-pill.ok{background:rgba(61,220,151,.12);color:#8af0c1}.fbau-pill.info{background:rgba(91,140,255,.12);color:#abc2ff}.fbau-pill.bad{background:rgba(255,111,125,.12);color:#ffb0ba}.fbau-pill.warn{background:rgba(245,158,11,.12);color:#f59e0b}
+.fbau-input{width:100%;border:1px solid var(--border);background:rgba(255,255,255,.03);color:var(--text);border-radius:12px;padding:11px 12px;outline:none;font:inherit;font-size:13px}
+.fbau-actions{display:flex;gap:10px;flex-wrap:wrap}
+#fb-auto-uploader-panel button, #fb-auto-uploader-panel input[type=file]::file-selector-button{background:rgba(255,255,255,.06);color:var(--text);border:1px solid var(--border);border-radius:14px;padding:10px 12px;font-size:13px;font-weight:700;cursor:pointer}
+#fb-auto-uploader-panel button.primary{background:linear-gradient(135deg,#5b8cff,#3f72f0)}#fb-auto-uploader-panel button.good{background:linear-gradient(135deg,rgba(61,220,151,.22),rgba(61,220,151,.14));color:#b5ffd9}#fb-auto-uploader-panel button.warn{background:linear-gradient(135deg,rgba(245,158,11,.22),rgba(245,158,11,.14));color:#ffd79f}
+#fbau-status{background:rgba(255,255,255,.04);padding:12px 14px;border-radius:14px;margin-top:10px;white-space:pre-wrap;font-size:13px;line-height:1.6}
+.fbau-item-box,.fbau-metric{background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:18px;padding:14px}
+.fbau-item-title{font-size:15px;font-weight:700;margin-bottom:6px}.fbau-item-meta{font-size:12px;color:var(--muted);line-height:1.6}.fbau-progress{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.fbau-metric .label{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--dim);font-weight:800}.fbau-metric .value{font-size:22px;font-weight:800;margin-top:6px}.fbau-metric .sub{font-size:12px;color:var(--muted);margin-top:4px}
+@media(max-width:700px){#fb-auto-uploader-panel{width:min(92vw,430px)}.fbau-grid.two,.fbau-progress{grid-template-columns:1fr}}
+#fbau-status.ok{border:1px solid rgba(61,220,151,.18);background:rgba(61,220,151,.10);color:#8af0c1}
+#fbau-status.warn{border:1px solid rgba(245,158,11,.18);background:rgba(245,158,11,.10);color:#ffd79f}
+#fbau-status.bad{border:1px solid rgba(255,111,125,.18);background:rgba(255,111,125,.10);color:#ffb0ba}
+#fbau-status.info{border:1px solid rgba(91,140,255,.18);background:rgba(91,140,255,.10);color:#abc2ff}
+.fbau-thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.fbau-thumb{width:54px;height:54px;border-radius:10px;overflow:hidden;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03)}
+.fbau-thumb img{width:100%;height:100%;object-fit:cover;display:block}

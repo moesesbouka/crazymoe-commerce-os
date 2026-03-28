@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>CrazyMoe Hub</title>
+<style>
+:root{
+  --bg:#0b0d12;--panel:rgba(16,19,30,.94);--panel2:rgba(255,255,255,.03);
+  --border:rgba(255,255,255,.08);--border2:rgba(255,255,255,.13);
+  --text:#eef2ff;--muted:#a1abc5;--dim:#5a6380;
+  --amber:#f59e0b;--amber-dim:rgba(245,158,11,.14);
+  --green:#3ddc97;--blue:#5b8cff;--red:#ff6f7d;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:radial-gradient(ellipse at 50% -10%,rgba(245,158,11,.08) 0%,transparent 60%),#0b0d12;color:var(--text);min-height:100vh}
+.shell{max-width:1340px;margin:0 auto;padding:24px;display:grid;grid-template-columns:240px 1fr 280px;gap:18px}
+.card{background:var(--panel);border:1px solid var(--border2);border-radius:20px;padding:18px;box-shadow:0 16px 48px rgba(0,0,0,.4)}
+.hero{grid-column:1/-1;display:flex;align-items:center;gap:18px;padding:22px 24px}
+.hero-icon{width:48px;height:48px;border-radius:14px;background:var(--amber);display:grid;place-items:center;font-weight:900;font-size:14px;color:#000;flex-shrink:0}
+.hero-title{font-size:28px;font-weight:800;letter-spacing:-.03em}
+.hero-sub{font-size:13px;color:var(--muted);margin-top:3px}
+.hero-badge{font-size:10px;font-weight:700;padding:3px 8px;border-radius:6px;background:var(--amber-dim);color:var(--amber);margin-left:12px;vertical-align:middle}
+.nav-links{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+.nav-link{font-size:11px;font-weight:700;padding:7px 13px;border-radius:10px;background:rgba(255,255,255,.06);border:1px solid var(--border2);color:var(--muted);text-decoration:none}
+.eyebrow{font-size:10px;text-transform:uppercase;letter-spacing:.14em;color:var(--dim);font-weight:800;margin:0 0 12px}
+.field{margin-bottom:12px}.label{font-size:11px;color:var(--muted);display:block;margin-bottom:5px;font-weight:600}
+.input{width:100%;padding:9px 11px;border-radius:10px;border:1px solid var(--border);background:rgba(255,255,255,.04);color:var(--text);font:inherit;font-size:13px;outline:none}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 14px;border-radius:10px;border:none;font:inherit;font-weight:700;font-size:12px;cursor:pointer}
+.btn-primary{background:var(--amber);color:#000;width:100%;justify-content:center}.btn-secondary{background:rgba(255,255,255,.06);color:var(--text);border:1px solid var(--border2);width:100%;justify-content:center;margin-top:8px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.metric{padding:14px;border-radius:16px;background:var(--panel2);border:1px solid var(--border)}
+.metric .label{font-size:10px;text-transform:uppercase;letter-spacing:.13em;color:var(--dim)}.metric .value{font-size:28px;font-weight:800;margin-top:8px}
+.pipeline{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:14px 0}.stage{padding:12px;border-radius:14px;background:var(--panel2);border:1px solid var(--border);text-align:center}
+.stage-name{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em}.stage-val{font-size:22px;font-weight:800;margin-top:6px}
+.table{width:100%;border-collapse:collapse;margin-top:10px}.table th,.table td{padding:11px;border-bottom:1px solid rgba(255,255,255,.06);text-align:left;font-size:13px}.table th{color:var(--dim);font-weight:700}
+.small{font-size:12px;color:var(--dim)}.toggle{display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--muted);font-size:12px}
+@media(max-width:1100px){.shell{grid-template-columns:1fr}.hero{grid-column:auto}.grid4,.pipeline{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <section class="card hero">
+    <div class="hero-icon">CM</div>
+    <div>
+      <div class="hero-title">CrazyMoe Hub <span class="hero-badge">overview only</span></div>
+      <div class="hero-sub">A read-only control surface for the listing pipeline and posting activity.</div>
+    </div>
+    <div class="nav-links">
+      <a class="nav-link" href="../intake/index.html">Intake</a>
+      <a class="nav-link" href="../optimizer/index.html">Optimizer</a>
+      <a class="nav-link" href="../../../crm/index.html">CRM</a>
+    </div>
+  </section>
+
+  <aside class="card">
+    <div class="eyebrow">Config</div>
+    <div class="field"><label class="label">Supabase URL</label><input id="sb-url" class="input" placeholder="https://your-project.supabase.co"></div>
+    <div class="field"><label class="label">Supabase anon key</label><input id="sb-key" class="input" placeholder="eyJ..."></div>
+    <button id="save-config" class="btn btn-primary">Save config</button>
+    <button id="refresh" class="btn btn-secondary">Refresh hub</button>
+    <label class="toggle"><input type="checkbox" id="auto-refresh"> Auto-refresh every 30s</label>
+    <div class="small" style="margin-top:12px">First run: add URL/key, then refresh.</div>
+  </aside>
+
+  <main class="card">
+    <div class="eyebrow">Overview</div>
+    <div class="grid4">
+      <div class="metric"><div class="label">Draft</div><div class="value" id="m-draft">…</div></div>
+      <div class="metric"><div class="label">Ready</div><div class="value" id="m-ready">…</div></div>
+      <div class="metric"><div class="label">Posted</div><div class="value" id="m-posted">…</div></div>
+      <div class="metric"><div class="label">Open CRM threads</div><div class="value" id="m-threads">…</div></div>
+    </div>
+
+    <div class="pipeline" id="pipeline">
+      <div class="stage"><div class="stage-name">Draft</div><div class="stage-val" id="p-draft">…</div></div>
+      <div class="stage"><div class="stage-name">Found</div><div class="stage-val" id="p-found">…</div></div>
+      <div class="stage"><div class="stage-name">Ready</div><div class="stage-val" id="p-ready">…</div></div>
+      <div class="stage"><div class="stage-name">Posted</div><div class="stage-val" id="p-posted">…</div></div>
+      <div class="stage"><div class="stage-name">Sold</div><div class="stage-val" id="p-sold">…</div></div>
+    </div>
+
+    <div class="eyebrow" style="margin-top:18px">Recent inventory activity</div>
+    <table class="table"><thead><tr><th>Item</th><th>Status</th><th>Updated</th></tr></thead><tbody id="activity"></tbody></table>
+  </main>
+
+  <aside class="card">
+    <div class="eyebrow">Posting sessions</div>
+    <table class="table"><thead><tr><th>Started</th><th>Posted</th><th>Failed</th></tr></thead><tbody id="sessions"></tbody></table>
+    <div class="eyebrow" style="margin-top:16px">Status</div>
+    <div class="small" id="hub-status">Ready.</div>
+  </aside>
+</div>
+
+<script src="../../lib/config.js"></script>
+<script src="../../lib/supabase-rest.js"></script>
+<script>
+const byId = id => document.getElementById(id);
+let timer = null;
+byId('sb-url').value = window.CM_CONFIG.supabaseUrl || '';
+byId('sb-key').value = window.CM_CONFIG.supabaseKey || '';
+
+byId('save-config').onclick = () => {
+  window.CM_SET_CONFIG({ supabaseUrl: byId('sb-url').value.trim(), supabaseKey: byId('sb-key').value.trim() });
+  byId('hub-status').textContent = 'Config saved.';
+};
+
+function setLoading() {
+  ['m-draft','m-ready','m-posted','m-threads','p-draft','p-found','p-ready','p-posted','p-sold'].forEach(id => byId(id).textContent = '…');
+}
+
+async function loadMetric(status){ return window.cmSupabaseFetch(`/inventory_items?status=eq.${status}&select=id`); }
+
+async function refreshHub() {
+  try {
+    setLoading();
+    const [draft, found, ready, posted, sold, threads, recent, sessions] = await Promise.all([
+      loadMetric('draft'),
+      loadMetric('found'),
+      loadMetric('ready'),
+      loadMetric('posted'),
+      loadMetric('sold'),
+      window.cmSupabaseFetch('/crm_threads?status=eq.open&select=id'),
+      window.cmSupabaseFetch('/inventory_items?select=title,status,updated_at&order=updated_at.desc&limit=8'),
+      window.cmSupabaseFetch('/posting_sessions?select=started_at,posted_count,failed_count&order=started_at.desc&limit=6')
+    ]);
+
+    byId('m-draft').textContent = draft.length;
+    byId('m-ready').textContent = ready.length;
+    byId('m-posted').textContent = posted.length;
+    byId('m-threads').textContent = threads.length;
+
+    byId('p-draft').textContent = draft.length;
+    byId('p-found').textContent = found.length;
+    byId('p-ready').textContent = ready.length;
+    byId('p-posted').textContent = posted.length;
+    byId('p-sold').textContent = sold.length;
+
+    byId('activity').innerHTML = recent.map(r => `<tr><td>${r.title || 'Untitled'}</td><td>${r.status || ''}</td><td>${r.updated_at || ''}</td></tr>`).join('');
+    byId('sessions').innerHTML = sessions.map(s => `<tr><td>${s.started_at || ''}</td><td>${s.posted_count || 0}</td><td>${s.failed_count || 0}</td></tr>`).join('');
+    byId('hub-status').textContent = 'Hub refreshed.';
+  } catch (e) {
+    byId('hub-status').textContent = `Refresh failed: ${e.message}`;
+  }
+}
+byId('refresh').onclick = refreshHub;
+byId('auto-refresh').addEventListener('change', e => {
+  if (timer) clearInterval(timer);
+  if (e.target.checked) timer = setInterval(refreshHub, 30000);
+});
+</script>
+</body>
+</html>

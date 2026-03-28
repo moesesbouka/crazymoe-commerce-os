@@ -1,0 +1,87 @@
+<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1.0'><title>CrazyMoe Listing Intake</title><style>
+:root{--bg:#0b0d12;--panel:rgba(18,22,31,.92);--border:rgba(255,255,255,.09);--text:#eef2ff;--muted:#a1abc5;--dim:#6d7690}
+*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif;background:radial-gradient(circle at top, rgba(91,140,255,.18), transparent 30%),linear-gradient(180deg,#0b0d12 0%,#090b10 100%);color:var(--text)}
+.shell{max-width:1320px;margin:0 auto;padding:24px;display:grid;grid-template-columns:280px 1fr 320px;gap:20px}.card{background:var(--panel);border:1px solid var(--border);border-radius:24px;padding:20px;box-shadow:0 20px 55px rgba(0,0,0,.5)}.hero{grid-column:1/-1}
+h1{margin:0;font-size:34px;letter-spacing:-.04em}p,li,label{color:var(--muted);line-height:1.7}.eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:var(--dim);font-weight:800;margin:0 0 10px}
+.metric,.row{padding:14px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid var(--border);margin:10px 0}.value{font-size:24px;font-weight:800}
+.btn{display:inline-block;padding:11px 14px;border-radius:14px;background:linear-gradient(135deg,#5b8cff,#3f72f0);font-weight:700;color:white;text-decoration:none;border:none;cursor:pointer}
+.input,textarea{width:100%;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:12px;color:var(--text);padding:10px 12px;font:inherit}
+.small{font-size:12px;color:var(--dim)}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+table{width:100%;border-collapse:collapse}td,th{padding:10px;border-bottom:1px solid rgba(255,255,255,.06);text-align:left}
+@media (max-width:1100px){.shell{grid-template-columns:1fr}.hero{grid-column:auto}.grid2{grid-template-columns:1fr}}
+</style></head><body>
+<div class='shell'>
+<section class='card hero'><div class='eyebrow'>Inside moe-inventory</div><h1>CrazyMoe Listing Intake</h1><p>Browser-side barcode detection, manual rescue, and direct Supabase save buttons.</p></section>
+<aside class='card'><div class='eyebrow'>Config</div><div class='row'><label>Supabase URL</label><input id='sb-url' class='input' placeholder='https://your-project.supabase.co'/></div><div class='row'><label>Supabase anon key</label><input id='sb-key' class='input' placeholder='eyJ...'/></div><button class='btn' id='save-config'>Save config</button><div class='row small'>BarcodeDetector support: <span id='bd-support'>checking…</span></div></aside>
+<main class='card'><div class='eyebrow'>Scanner workspace</div>
+<div class='grid2'>
+  <div class='row'><div><label>Item image</label><input id='scan-file' class='input' type='file' accept='image/*'/><div class='small'>Use a barcode/label photo.</div></div></div>
+  <div class='row'><div><label>Manual OCR / identifier rescue</label><textarea id='manual-id' rows='6' placeholder='Paste OCR text, UPC, model, or SKU here'></textarea></div></div>
+</div>
+<div class='row'><div class='value' id='scan-result'>No scan yet</div><div class='small' id='scan-copy'>Production path is barcode → focused OCR → general OCR → vision. This starter implements barcode detection + manual rescue + save flow.</div></div>
+<div class='grid2'>
+  <div class='row'><div><label>Title</label><input id='title' class='input' placeholder='Detected or edited title'/></div></div>
+  <div class='row'><div><label>Price</label><input id='price' class='input' placeholder='0.00'/></div></div>
+  <div class='row'><div><label>Condition</label><input id='condition' class='input' value='Good'/></div></div>
+  <div class='row'><div><label>Status</label><input id='status' class='input' value='found'/></div></div>
+</div>
+<div style='display:flex;gap:10px;flex-wrap:wrap;margin-top:14px'>
+  <button class='btn' id='detect-btn'>Detect barcode</button>
+  <button class='btn' id='save-found'>Save as Found</button>
+  <button class='btn' id='save-ready'>Promote to Ready</button>
+</div>
+</main>
+<aside class='card'><div class='eyebrow'>Notes</div><ul><li>Found stays Found until you promote it.</li><li>Server OCR belongs behind /api/ocr.</li><li>Google Drive photo selection is the next manual bottleneck worth eliminating.</li></ul><div class='row'><div class='small' id='intake-status'>Ready.</div></div></aside>
+</div>
+<script src='../../lib/config.js'></script><script src='../../lib/supabase-rest.js'></script>
+<script>
+const byId = (id) => document.getElementById(id);
+byId('bd-support').textContent = ('BarcodeDetector' in window) ? 'yes' : 'no';
+byId('sb-url').value = window.CM_CONFIG.supabaseUrl || '';
+byId('sb-key').value = window.CM_CONFIG.supabaseKey || '';
+byId('save-config').onclick = () => { window.CM_SET_CONFIG({ supabaseUrl: byId('sb-url').value.trim(), supabaseKey: byId('sb-key').value.trim() }); byId('intake-status').textContent = 'Config saved.'; };
+async function detectBarcodeFromFile(file) {
+  if (!('BarcodeDetector' in window)) throw new Error('BarcodeDetector not supported in this browser');
+  const img = await createImageBitmap(file);
+  const detector = new BarcodeDetector({ formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39'] });
+  const results = await detector.detect(img);
+  return results[0] && results[0].rawValue ? results[0].rawValue : '';
+}
+byId('detect-btn').onclick = async () => {
+  const file = byId('scan-file').files && byId('scan-file').files[0];
+  const manual = byId('manual-id').value.trim();
+  try {
+    let found = manual;
+    if (!found && file) found = await detectBarcodeFromFile(file);
+    if (!found) throw new Error('No identifier found');
+    byId('scan-result').textContent = found;
+    if (!byId('title').value) byId('title').value = `Detected item ${found}`;
+    byId('scan-copy').textContent = '✅ Identifier captured. Review and save.';
+    byId('intake-status').textContent = 'Detection complete.';
+  } catch (e) {
+    byId('scan-result').textContent = 'Detection failed';
+    byId('scan-copy').textContent = `Use manual OCR rescue. ${e.message}`;
+    byId('intake-status').textContent = `Detection failed: ${e.message}`;
+  }
+};
+async function saveItem(nextStatus) {
+  try {
+    const payload = {
+      upc: byId('scan-result').textContent !== 'No scan yet' ? byId('scan-result').textContent : byId('manual-id').value.trim(),
+      title: byId('title').value.trim(),
+      price: byId('price').value ? Number(byId('price').value) : null,
+      condition: byId('condition').value.trim() || 'Good',
+      status: nextStatus,
+      found_at: nextStatus === 'found' ? new Date().toISOString() : null,
+      ready_at: nextStatus === 'ready' ? new Date().toISOString() : null
+    };
+    await window.cmSupabaseFetch('/inventory_items', { method: 'POST', body: JSON.stringify(payload) });
+    byId('status').value = nextStatus;
+    byId('intake-status').textContent = `Saved as ${nextStatus}.`;
+  } catch (e) {
+    byId('intake-status').textContent = `Save failed: ${e.message}`;
+  }
+}
+byId('save-found').onclick = () => saveItem('found');
+byId('save-ready').onclick = () => saveItem('ready');
+</script></body></html>
