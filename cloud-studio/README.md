@@ -139,3 +139,31 @@ archive until owner-approved retirement; never drop it as routine rollback.
 Keep snapshots, inventories, photos, credentials and audit evidence outside this
 public repository. Deploy on a separate Studio target so storefront deployment
 and DNS are not changed as a side effect.
+
+## Cloud Studio preview
+
+The isolated Studio project serves the adapted editor at
+https://crazymoe-marketplace-studio.vercel.app/ and mobile intake at
+https://crazymoe-marketplace-studio.vercel.app/app/. The team-qualified alias may
+redirect to Vercel SSO. Chrome rendered the Studio sign-in form at 412px and
+1440px on the short alias. Owner sign-in and a real Pixel upload still require
+acceptance. The browser keeps credentials in memory for the open session.
+
+The private mobile upload path accepts member-owned objects and verifies their
+size and SHA-256 in a cloud function before committing the product and its
+identification job. PostgreSQL schedules the cloud worker, leases one job at a
+time, and records a proposal separately from seller fields. A real migrated
+product completed the cloud visual research job on retry after an initial empty
+model response. Model confidence is a suggestion. Retailer verification and
+manufacturer sourcing require additional work.
+
+The public storefront uses public_listings. Seven legacy tables now restrict
+client access, and private inventory and administrative views require membership.
+The storefront still loaded its listings and images in Chrome after the change.
+The older Commerce OS extension still references active_listings directly.
+Migrate that authenticated sync path before tightening its remaining grants.
+
+Next acceptance gates include verified per-selection JPEG exports preserving
+existing enhancement, ordering and style, revision-bound approval, two consecutive
+Facebook drafts through the real Commerce OS extension, full restoration, source
+delta reconciliation, and the custom-domain cutover. Keep the office fallback.

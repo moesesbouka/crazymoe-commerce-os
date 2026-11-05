@@ -80,10 +80,11 @@ Deno.serve(async (req: Request) => {
       return reply(result.data);
     }
     const photo = path.match(/^photo\/([a-f0-9]{64})$/);
-    if (photo && req.method === "GET") {
+    const reference = path.match(/^reference\/([A-Za-z0-9_-]{1,100})\/([a-z0-9-]{5,100})$/);
+    if ((photo || reference) && req.method === "GET") {
       // Membership and verification are checked using the user's JWT before
       // the service credential can sign access to exactly this asset.
-      const access = await client.rpc("studio_asset_access", { p_sha: photo[1] });
+      const access = reference ? await client.rpc("studio_reference_access",{p_item:reference[1],p_reference:reference[2]}) : await client.rpc("studio_asset_access", { p_sha: photo![1] });
       if (access.error) return failure(access.error);
       if (!access.data) return reply({ error: "Verified photo unavailable" }, 404);
       const admin = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
@@ -91,7 +92,7 @@ Deno.serve(async (req: Request) => {
       });
       const signed = await admin.storage.from(access.data.bucket).createSignedUrl(access.data.path, 60);
       if (signed.error) return reply({ error: "Photo unavailable" }, 503);
-      return reply({ url: signed.data.signedUrl, expires_in: 60, sha256: photo[1] });
+      return reply({ url: signed.data.signedUrl, expires_in: 60, sha256: access.data.sha256 });
     }
     return reply({ error: "Endpoint not available" }, 404);
   } catch (error) {

@@ -76,7 +76,7 @@ async function preview(photo) {
   get("hero").removeAttribute("src");
   get("photo-status").textContent = "Loading photo…";
   try {
-    const result = await request("/functions/v1/studio-api/photo/" + encodeURIComponent(photo.sha));
+    const result = await request("/functions/v1/studio-api/" + (photo.kind === "real" ? "photo/"+encodeURIComponent(photo.sha) : "reference/"+encodeURIComponent(current.id)+"/"+encodeURIComponent(photo.id)));
     if (sequence === photoRequest) { get("hero").src = result.url; get("photo-status").textContent = ""; }
   } catch(error) { if (sequence === photoRequest) get("photo-status").textContent = error.message; }
 }
@@ -91,13 +91,32 @@ function openItem(item) {
     input.dataset.initial = input.value;
   }
   get("diagnostics").textContent = statusLabel[item.status] + " · Revision " + item.revision;
-  const photos = item.photo_selection.filter(photo => photo.kind === "real" && photo.sha);
+  const evidence = item.visual_proposal;
+  if (evidence) {
+    const panel = document.createElement("details"), caption = document.createElement("summary");
+    caption.textContent = "Identification suggestions · " + evidence.confidence;
+    panel.append(caption);
+    for (const observation of evidence.observations || []) {
+      const line = document.createElement("p"); line.textContent = observation; panel.append(line);
+    }
+    if (item.proposal_revision === item.revision) {
+      for (const field of ["title","model"]) {
+        if (!evidence.suggestion?.[field]) continue;
+        const use = document.createElement("button"); use.type = "button"; use.className = "secondary";
+        use.textContent = "Use " + field + ": " + evidence.suggestion[field];
+        use.onclick = () => {form.elements[field].value = evidence.suggestion[field];};
+        panel.append(use);
+      }
+    }
+    get("diagnostics").append(panel);
+  }
+  const photos = item.photo_selection.filter(photo => (photo.kind === "real" && photo.sha) || (photo.kind === "manufacturer" && photo.id));
   ++photoRequest;
   get("hero").removeAttribute("src");
   get("photo-status").textContent = photos.length ? "" : "No selected original photos.";
   get("thumbs").replaceChildren(...photos.map((photo,index) => {
     const button = document.createElement("button");
-    button.type = "button"; button.textContent = "Photo " + (index + 1); button.onclick = () => preview(photo);
+    button.type = "button"; button.textContent = (photo.kind === "manufacturer" ? "Reference " : "Photo ") + (index + 1); button.onclick = () => preview(photo);
     return button;
   }));
   if (photos.length) preview(photos[0]);
