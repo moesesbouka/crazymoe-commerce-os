@@ -1,0 +1,85 @@
+# Existing Studio cloud migration
+
+This directory extends the existing CrazyMoe Commerce OS project. It is not a
+replacement storefront and is not a deployed cloud Studio.
+
+The owner directive is now: retain crazymoe.com, migrate the existing office
+Studio to authenticated studio.crazymoe.com and studio.crazymoe.com/app, and make
+all essential workflows work with every office computer unavailable. Reuse the
+existing Supabase and Vercel resources where appropriate. Keep the office system
+available until full acceptance. No purchases, subscriptions, public inventory,
+public original photos, Facebook publication or customer messages are authorized.
+
+## Implemented checkpoint
+
+- `legacy/` preserves the existing office application's listing persistence,
+  public copy and revision-bound approval logic. These are reference modules,
+  not a PostgreSQL adapter. Their SQLite and local-file dependencies still need
+  migration; in particular manufacturer image fingerprints currently read paths.
+- `migrations/private_archive.sql` creates an isolated, append-only migration
+  evidence store. It is not an operational inventory database. There are no
+  grants to anonymous, authenticated or service-role clients.
+- `restore_archive.py` verifies content hashes and reconstructs NEW SQLite files
+  from archived schema/rows. It refuses overwrites and compares every archived
+  data row after restoration. SQLite internal sequences are regenerated, not
+  preserved byte-for-byte. Existing source SQLite backups remain available.
+- `test_migration_safety.py` exercises the existing seller-edit protections,
+  conflicts, explicit clears, rollback, approval snapshots and tamper rejection.
+
+Run `python -m unittest discover -s cloud-studio -p 'test_*.py' -v`.
+
+## Required authoritative model
+
+Separate physical inventory IDs and identity from catalog facts, manifests and
+evidence, AI proposals/confidence, seller-authored fields, generated public copy,
+ordered photo selections, and approval/publication events. Preserve all legacy
+IDs and payloads. Unknown historical authorship must stay unknown; protect its
+saved values without asserting seller authorship. Workers may propose changes
+but cannot overwrite protected seller fields. Version-bound atomic writes must
+reject stale editors. Rollback appends an event; it does not erase history.
+
+Approval must bind exact customer-facing fields and actual JPEG content/order.
+An old approval record without matching immutable evidence must be retained as
+historical evidence, never silently upgraded to a current approval.
+
+## Execution phases and gates
+
+1. Audit live source, data, backups, tests and existing cloud permissions.
+2. Configure private PostgreSQL, authentication, private originals, API and
+   durable cloud jobs with retries, idempotency, bounded concurrency and logs.
+3. Import preserved IDs/data/provenance/history/photos and verify counts/hashes.
+4. Adapt the existing Studio/mobile UI to the cloud backend; retain fast
+   navigation, Save & Next, grouping, editing, approvals and offline upload queue.
+5. Move identification, research and copy generation to cloud workers; keep
+   evidence separate from listing copy and require exact-model corroboration.
+6. Update the existing Studio-connected extension, keeping Draft Builder as the
+   fallback. Transfer approved revisions and JPEGs directly from the cloud.
+7. Test real workflows, backup restoration, privacy and office-offline operation
+   before cutover. Keep original URLs usable as the fallback until then.
+
+Studio must visibly link Create Facebook Listing to
+https://www.facebook.com/marketplace/create/item without publication. Test at
+least two consecutive products with independent title/price/condition/copy/JPEGs.
+Default condition remains New and the owner may change it. Remove the redundant
+review checkbox; retain actual approval state. Suggested price starts at 50% of
+supported retail evidence, never overwriting a seller price.
+
+## Acceptance status
+
+No operational cloud Studio, AI worker, mobile cloud upload, cloud extension
+handoff, DNS cutover, or office-offline workflow is claimed by this checkpoint.
+Frontend deployment alone is insufficient. Each acceptance item requires live
+evidence, including negative permission tests and a real restoration exercise.
+
+Independent recommendations should be compared with observed source and
+behavior before adoption. Do not replace functioning components merely because
+an external assessment proposes a rebuild.
+
+## Rollback and sensitive data
+
+The archive migration is additive and does not switch application reads/writes.
+The office application therefore remains the active fallback. Retain the private
+archive until owner-approved retirement; never drop it as routine rollback.
+Keep snapshots, inventories, photos, credentials and audit evidence outside this
+public repository. Deploy on a separate Studio target so storefront deployment
+and DNS are not changed as a side effect.
