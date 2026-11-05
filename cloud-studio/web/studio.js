@@ -242,3 +242,72 @@ get("transfer-export").onclick=async ()=>{
     get("editor-status").textContent="In the Facebook tab, choose Load next approved product.";
   }catch(error){get("editor-status").textContent=error.message;}
 };
+
+{
+  const dialog = get("photo-editor"), list = get("photo-list"), message = get("selection-status");
+  const saveButton = get("save-photos"), previousButton = get("previous-photos");
+  let data, order, item, generation = 0, writing = false;
+  const thumbnails = new Map();
+  function draw() {
+    list.replaceChildren();
+    const remaining = data.choices.map(c=>c.id).filter(id=>!order.includes(id));
+    for (const id of [...order,...remaining]) {
+      const choice = data.choices.find(c=>c.id===id), index = order.indexOf(id);
+      const row = document.createElement("li"), name = document.createElement("span");
+      const group = choice.source.kind==="manufacturer" ? "Manufacturer" : "Inventory";
+      name.textContent = group+" photo "+choice.position+" · "+(choice.source.style_mode || "original");
+      if (thumbnails.has(id)) {
+        const img=document.createElement("img"); img.src=thumbnails.get(id); img.alt=""; row.append(img);
+      }
+      row.append(name);
+      const button = (label,disabled,action)=>{
+        const b=document.createElement("button"); b.type="button"; b.className="secondary"; b.textContent=label;
+        b.disabled=disabled || writing; b.onclick=()=>{action();draw();}; row.append(b);
+      };
+      if (index<0) button("Add",order.length>=10,()=>order.push(id));
+      else {
+        button("Earlier",index===0,()=>{order.splice(index,1);order.splice(index-1,0,id);});
+        button("Later",index===order.length-1,()=>{order.splice(index,1);order.splice(index+1,0,id);});
+        button("Remove",false,()=>order.splice(index,1));
+      }
+      list.append(row);
+    }
+    saveButton.disabled=writing || !order.length || JSON.stringify(order)===JSON.stringify(data.selected);
+  }
+  get("edit-photos").onclick=async ()=>{
+    if(Object.keys(patch()).length){get("editor-status").textContent="Save your listing edits before changing photos.";return;}
+    item=current; const turn=++generation;
+    data=null; thumbnails.clear(); list.replaceChildren(); previousButton.hidden=true;
+    saveButton.disabled=true; message.textContent="Loading prepared photos…";dialog.showModal();
+    try {
+      const result=await rpc("studio_photo_choices",{p_item:item.id});
+      if(turn!==generation)return;
+      if(result.listing_revision!==item.revision)throw Error("Listing changed. Refresh inventory before editing photos.");
+      data=result; order=[...data.selected];previousButton.hidden=!data.previous;
+      message.textContent=data.choices.length?"":"This product has no verified prepared photos yet.";
+      draw();
+      await Promise.allSettled(data.choices.map(async choice=>{
+        const source=choice.source;
+        const path=source.kind==="manufacturer" ? "reference/"+encodeURIComponent(item.id)+"/"+encodeURIComponent(source.id) : "photo/"+encodeURIComponent(source.sha);
+        const result=await request("/functions/v1/studio-api/"+path);
+        if(turn===generation && !writing){thumbnails.set(choice.id,result.url);draw();}
+      }));
+    } catch(error){if(turn===generation)message.textContent=error.message;}
+  };
+  previousButton.onclick=()=>{if(data?.previous){order=[...data.previous];draw();}};
+  get("cancel-photos").onclick=()=>{if(!writing)dialog.close();};
+  dialog.oncancel=event=>{if(writing)event.preventDefault();};
+  dialog.onclose=()=>{generation++;thumbnails.clear();};
+  saveButton.onclick=async ()=>{
+    if(writing || !data)return;
+    writing=true;previousButton.disabled=true;draw();message.textContent="Saving photos…";
+    try {
+      await rpc("studio_save_photo_choices",{p_item:item.id,p_listing_revision:data.listing_revision,p_photo_revision:data.revision,p_choices:order});
+      saveButton.disabled=true;
+      dialog.close();
+      await refresh();openItem(items.find(i=>i.id===item.id));
+      get("editor-status").textContent="Photos saved. Review the updated Facebook draft before approval.";
+    } catch(error){if(dialog.open)message.textContent=error.message;else get("editor-status").textContent="Photos saved. Refresh inventory to load the updated selection.";}
+    finally{writing=false;previousButton.disabled=false;if(dialog.open)draw();}
+  };
+}

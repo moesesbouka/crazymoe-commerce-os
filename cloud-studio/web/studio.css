@@ -17,3 +17,10 @@
 .identity-more{border-top:1px solid #e8edf1;margin-top:5px;padding-top:4px}.identity-more>summary{padding:8px 0;cursor:pointer;color:#365773;font-weight:700;touch-action:manipulation}.identity-more[open]>summary{margin-bottom:5px}
 
 [hidden]{display:none!important}#login{min-height:100dvh;display:grid;place-items:center;padding:24px}.login-panel{width:min(100%,380px);border:1px solid var(--line);border-radius:16px;background:white;padding:28px}#signin{display:grid;gap:16px}#signin label{display:grid;gap:6px}#signin input{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px}.inventory-card{text-align:left;padding:18px;background:white;border:1px solid var(--line);border-radius:12px}.inventory-card strong,.inventory-card small{display:block}.inventory-card small{margin-top:8px}#thumbs button{padding:8px}
+
+#photo-editor {max-width:min(42rem,94vw);max-height:88vh;overflow:auto}
+#photo-list {padding-left:1.5rem}
+#photo-list li {margin:.6rem 0;padding:.45rem;border-bottom:1px solid #ddd}
+#photo-list img {width:4rem;height:4rem;object-fit:contain;vertical-align:middle;margin-right:.6rem}
+#photo-list li span {display:inline-block;margin-right:.4rem}
+#photo-list button {padding:.5rem;margin:.15rem}
