@@ -9,6 +9,8 @@ all essential workflows work with every office computer unavailable. Reuse the
 existing Supabase and Vercel resources where appropriate. Keep the office system
 available until full acceptance. No purchases, subscriptions, public inventory,
 public original photos, Facebook publication or customer messages are authorized.
+The owner subsequently approved the existing Supabase organization's Pro upgrade;
+the upgraded plan has been verified. Other paid purchases still require approval.
 
 ## Implemented checkpoint
 
@@ -25,6 +27,41 @@ public original photos, Facebook publication or customer messages are authorized
   preserved byte-for-byte. Existing source SQLite backups remain available.
 - `test_migration_safety.py` exercises the existing seller-edit protections,
   conflicts, explicit clears, rollback, approval snapshots and tamper rejection.
+- `migrations/authoritative_core.sql` defines the private operational model:
+  inventory, identity, catalog, manifest/research evidence, protected saved fields,
+  generated candidates, ordered photos, immutable approvals/revisions, proposals
+  and a durable job table. A job table is not a running cloud worker.
+- `migrations/import_preserved_snapshot.sql` imports the archived snapshot without
+  merging generated candidates into saved listing fields or activating historical
+  approvals. Set `studio.migration_batch` explicitly within its transaction.
+- `migrations/authenticated_api.sql` exposes narrow authenticated RPC commands.
+  Enabled Studio membership is checked inside each private definer function.
+  Clients have no direct table grants. `api/index.ts` verifies JWTs using Auth
+  before those commands and signs only verified original-photo assets.
+- `test_authoritative_core.sql` exercises membership rejection, optimistic
+  concurrency, explicit clears, seller provenance, approval invalidation and
+  append-only rollback in a transaction that rolls back all test changes.
+- `photo_migration/index.ts` is a bounded migration endpoint template. Supply a
+  private `migration-config.json` with `token_sha256`, `expires_at` (epoch ms) and
+  `allowed` (SHA-256 to byte-size map). It accepts only exact manifest content,
+  never overwrites objects, expires automatically, and can be closed explicitly.
+  The sender must download every uploaded object and verify SHA-256 and size;
+  bucket object counts alone are insufficient evidence of successful migration.
+
+The private core, snapshot import and authenticated API are deployed as an
+additive foundation. Original-photo copying is in progress at this checkpoint.
+The source office application has not been switched to these APIs.
+
+Validated: legacy Python regression suite (8 tests), deployed core integration
+assertions, owner-scoped SQL read, and live API rejection of anonymous requests
+(401), invalid tokens (401), and unapproved browser origins (403). SQL claims
+simulation is not a real browser login test. The copied database archive was
+restored and its complete row contents compared against the archived source.
+
+New private tables deliberately have RLS with no client policies and no table
+grants: owner-checked commands are the only client interface. Security advisories
+in the existing public application schema remain outside this additive migration
+and must be investigated before declaring the overall platform secure.
 
 Run `python -m unittest discover -s cloud-studio -p 'test_*.py' -v`.
 
