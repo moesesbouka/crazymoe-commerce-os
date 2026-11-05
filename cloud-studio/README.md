@@ -49,14 +49,33 @@ the upgraded plan has been verified. Other paid purchases still require approval
   bucket object counts alone are insufficient evidence of successful migration.
 
 The private core, snapshot import and authenticated API are deployed as an
-additive foundation. Original-photo copying is in progress at this checkpoint.
-The source office application has not been switched to these APIs.
+additive foundation. All originals and preserved manufacturer-reference files
+in the captured snapshot have completed upload, download and SHA-256/byte-size
+verification. Their receipts are archived privately. Both temporary import
+endpoints were replaced with permanently closed responses after completion.
+The source office application has not been switched to these APIs. A fresh delta
+comparison is required before cutover because office editing remains active.
+
+`finalize_photo_receipts.sql` refuses incomplete receipts or storage mismatches
+before marking originals verified. That rejection path was exercised against
+the deployed database with test changes rolled back. `private_reference_assets.sql`
+and `import_reference_receipts.sql` preserve manufacturer associations separately;
+all selected manufacturer entries resolve to verified cloud files. This does not
+establish product identity or approve those images for publication.
+
+`legacy/ui/` preserves the existing Studio HTML, CSS and JavaScript for adaptation.
+The direct Create Facebook Listing link was also added to the office HTML after
+a hash-verified backup. No Facebook publication was performed. Browser rendering
+remains unverified because the workspace browser installation failed.
 
 Validated: legacy Python regression suite (8 tests), deployed core integration
 assertions, owner-scoped SQL read, and live API rejection of anonymous requests
 (401), invalid tokens (401), and unapproved browser origins (403). SQL claims
 simulation is not a real browser login test. The copied database archive was
 restored and its complete row contents compared against the archived source.
+Three original samples were additionally downloaded and hash-checked directly
+from the independent cloud workspace without office networking. This verifies
+sample storage access, not independent operation of the complete application.
 
 New private tables deliberately have RLS with no client policies and no table
 grants: owner-checked commands are the only client interface. Security advisories

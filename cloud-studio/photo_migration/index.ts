@@ -32,6 +32,15 @@ Deno.serve(async req=>{
  }
  const sha=url.searchParams.get("sha")||"";
  if(!Object.prototype.hasOwnProperty.call(ALLOWED,sha))return response({error:"Photo outside approved migration manifest"},403);
+ if(url.pathname.endsWith("/verify")){
+  const downloaded=await client.storage.from(BUCKET).download("originals/"+sha);
+  if(downloaded.error||!downloaded.data)return response({error:"Original unavailable"},404);
+  const bytes=await downloaded.data.arrayBuffer();
+  if(bytes.byteLength!==ALLOWED[sha]||await digest(bytes)!==sha)return response({error:"Stored original mismatch"},409);
+  const signed=await client.storage.from(BUCKET).createSignedUrl("originals/"+sha,120);
+  if(signed.error)return response({error:"Verification URL failed"},502);
+  return response({sha256:sha,bytes:bytes.byteLength,verification_url:signed.data.signedUrl});
+ }
  const declared=Number(req.headers.get("content-length"));
  if(declared!==ALLOWED[sha])return response({error:"Size mismatch"},400);
  const bytes=await req.arrayBuffer();
