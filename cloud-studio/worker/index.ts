@@ -35,6 +35,10 @@ Deno.serve(async req => {
       const download=await admin.storage.from(photo.bucket).download(photo.object_path);
       if (download.error || !download.data) throw Error("Verified original unavailable");
       const bytes=new Uint8Array(await download.data.arrayBuffer());
+      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+      const actualHash = Array.from(digest, byte => byte.toString(16).padStart(2,"0")).join("");
+      if (bytes.length !== photo.bytes || actualHash !== photo.sha256)
+        throw Error("Original differs from its verified receipt");
       const mimeType = bytes[0]===255 && bytes[1]===216 ? "image/jpeg" : bytes[0]===137 ? "image/png" :
         String.fromCharCode(...bytes.slice(8,12))==="WEBP" ? "image/webp" : null;
       if (mimeType) { parts.push({inlineData:{mimeType,data:base64(bytes)}});hashes.push(photo.sha256); }
@@ -49,7 +53,7 @@ Deno.serve(async req => {
     const output=candidate?.content?.parts?.filter((p:{thought?:boolean})=>!p.thought).map((p:{text?:string})=>p.text||"").join("");
     if (!output) throw Error("Empty vision response: "+(candidate?.finishReason || result.promptFeedback?.blockReason || "unknown"));
     const parsed=JSON.parse(output);
-    if (!Array.isArray(parsed.observations) || !["exact_label","partial","unknown"].includes(parsed.confidence))
+    if (!Array.isArray(parsed.observations) || !parsed.observations.every((v:unknown)=>typeof v==="string") || !["exact_label","partial","unknown"].includes(parsed.confidence))
       throw Error("Invalid model evidence");
     evidence={model:model.name,photo_hashes:hashes,observations:parsed.observations,confidence:parsed.confidence,
       needs_seller_input:parsed.needs_seller_input,suggestion:{title:String(parsed.suggestion?.title||"").slice(0,300),
