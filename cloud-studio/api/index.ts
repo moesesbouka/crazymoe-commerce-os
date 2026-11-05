@@ -1,6 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2.119.0";
 
-const origins = new Set(["https://studio.crazymoe.com"]);
+const origins = new Set(["https://studio.crazymoe.com", "https://crazymoe-marketplace-studio.vercel.app", "https://crazymoe-marketplace-studio-moe-boukas-projects.vercel.app"]);
 const methods = "GET, PATCH, POST, OPTIONS";
 const baseHeaders = { "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" };
 
@@ -37,6 +37,33 @@ Deno.serve(async (req: Request) => {
       const result = await client.rpc("studio_state");
       if (result.error) return failure(result.error);
       return reply({ items: result.data, migration_preview: true });
+    }
+    if (path === "intake" && req.method === "POST") {
+      const raw = await req.text();
+      if (raw.length > 8192) return reply({error:"Manifest too large"},413);
+      const {batch, files} = JSON.parse(raw);
+      if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(batch)
+        || !Array.isArray(files) || files.length < 1 || files.length > 12) return reply({error:"Invalid upload batch"},400);
+      const admin = createClient(url,Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,{auth:{persistSession:false}});
+      const userId = verified.data.user.id;
+      const checked = [];
+      for (const file of files) {
+        if (!/^[a-f0-9]{64}$/.test(file.sha) || typeof file.name !== "string" || file.name.length > 255
+          || !Number.isSafeInteger(file.bytes) || file.bytes < 1 || file.bytes > 16*1024*1024) return reply({error:"Invalid photo"},400);
+        const object = await admin.storage.from("studio-originals").download("incoming/"+userId+"/"+batch+"/"+file.sha);
+        if (object.error || !object.data || object.data.size !== file.bytes) return reply({error:"Original missing or incomplete"},409);
+        const bytes = new Uint8Array(await object.data.arrayBuffer());
+        const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)), b => b.toString(16).padStart(2,"0")).join("");
+        if (digest !== file.sha) return reply({error:"Photo verification failed"},409);
+        const jpg = bytes[0]===255 && bytes[1]===216 && bytes[2]===255;
+        const png = bytes[0]===137 && String.fromCharCode(...bytes.slice(1,4))==="PNG";
+        const webp = String.fromCharCode(...bytes.slice(0,4))==="RIFF" && String.fromCharCode(...bytes.slice(8,12))==="WEBP";
+        if (!jpg && !png && !webp) return reply({error:"Use JPEG, PNG or WebP photos"},415);
+        if (!checked.some(existing => existing.sha === digest)) checked.push({sha:digest,name:file.name,bytes:bytes.length});
+      }
+      const result = await admin.rpc("studio_finish_intake",{p_user:userId,p_batch:batch,p_files:checked});
+      if (result.error) return failure(result.error);
+      return reply({id:result.data});
     }
     const item = path.match(/^inventory\/([A-Za-z0-9_-]{1,100})(\/rollback)?$/);
     if (item && ((req.method === "PATCH" && !item[2]) || (req.method === "POST" && item[2]))) {
