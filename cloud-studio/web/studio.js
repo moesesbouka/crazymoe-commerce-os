@@ -82,6 +82,7 @@ async function preview(photo) {
 }
 function openItem(item) {
   current = item;
+  get("transfer-export").hidden = item.status !== "approved";
   get("edit-title").textContent = title(item);
   get("editor-status").textContent = "";
   for (const key of fields) {
@@ -187,4 +188,57 @@ get("upload-form").onsubmit = async event => {
     if (item) openItem(item);
   } catch(error) { message.textContent = error.message; }
   finally { button.disabled = picker.disabled = false; }
+};
+let reviewedExport = null, previewGeneration = 0;
+const previewObjects = [];
+get("review-export").onclick = async () => {
+  if (Object.keys(patch()).length) {get("editor-status").textContent="Save your changes before reviewing the draft."; return;}
+  const generation=++previewGeneration;
+  get("confirm-export").disabled=true; reviewedExport=null;
+  get("export-fields").textContent=get("export-description").textContent="";
+  get("export-photos").replaceChildren();get("export-status").textContent="Checking selected JPEG files…";
+  get("export-review").showModal();
+  try {
+    const data=await request("/functions/v1/studio-api/export-preview",{method:"POST",body:JSON.stringify({id:current.id,revision:current.revision})});
+    const snapshot=data.snapshot;
+    if (generation!==previewGeneration) return;
+    get("export-fields").textContent=[snapshot.title,"$"+(snapshot.price||""),snapshot.condition].filter(Boolean).join(" · ");
+    get("export-description").textContent=snapshot.description;
+    for (const [position,file] of snapshot.images.entries()) {
+      const response=await fetch(data.urls[position],{cache:"no-store"});
+      if (!response.ok) throw Error("Photo download failed");
+      const bytes=await response.arrayBuffer();
+      const digest=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)),b=>b.toString(16).padStart(2,"0")).join("");
+      if (bytes.byteLength!==file.bytes || digest!==file.sha) throw Error("Photo verification failed");
+      if (generation!==previewGeneration) return;
+      const img=document.createElement("img"),url=URL.createObjectURL(new Blob([bytes],{type:"image/jpeg"}));
+      previewObjects.push(url);img.src=url;img.alt="Listing photo "+(position+1);img.width=144;
+      await img.decode();
+      if (generation!==previewGeneration) return;
+      get("export-photos").append(img);
+    }
+    reviewedExport=snapshot;get("confirm-export").disabled=false;
+    get("export-status").textContent="Review the listing text and photo order before approving.";
+  } catch(error) {if (generation===previewGeneration) get("export-status").textContent=error.message;}
+};
+get("close-export").onclick=()=>get("export-review").close();
+get("export-review").onclose=()=>{++previewGeneration;reviewedExport=null;previewObjects.splice(0).forEach(url=>URL.revokeObjectURL(url));};
+get("confirm-export").onclick=async ()=>{
+  const snapshot=reviewedExport;if (!snapshot) return;
+  get("confirm-export").disabled=true;
+  try {
+    await rpc("studio_approve_export",{p_item:snapshot.id,p_revision:snapshot.revision,p_snapshot:snapshot});
+    current.status="approved";render();get("export-review").close();openItem(current);
+    get("editor-status").textContent="Approved for Facebook handoff.";
+  } catch(error) {get("export-status").textContent=error.message;get("confirm-export").disabled=false;}
+};
+get("transfer-export").onclick=async ()=>{
+  try {
+    if(Object.keys(patch()).length)throw Error("Save changes and approve the updated draft first.");
+    if(!globalThis.chrome?.runtime?.sendMessage)throw Error("Open Studio in Chrome with the Commerce OS extension enabled.");
+    const token=await rpc("studio_issue_handoff",{p_item:current.id,p_revision:current.revision});
+    const answer=await chrome.runtime.sendMessage("kbdeepgfbofgljhijkdejmodfhfeeplh",{type:"STUDIO_APPROVED_DRAFT",token});
+    if(!answer?.ok)throw Error("Commerce OS could not open the draft.");
+    get("editor-status").textContent="In the Facebook tab, choose Load next approved product.";
+  }catch(error){get("editor-status").textContent=error.message;}
 };

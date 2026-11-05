@@ -65,6 +65,16 @@ Deno.serve(async (req: Request) => {
       if (result.error) return failure(result.error);
       return reply({id:result.data});
     }
+    if (path === "export-preview" && req.method === "POST") {
+      const {id,revision} = await req.json();
+      const result = await client.rpc("studio_export_preview",{p_item:id,p_revision:revision});
+      if (result.error) return failure(result.error);
+      const admin = createClient(url,Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,{auth:{persistSession:false}});
+      const paths = result.data.images.map((image:{sha:string}) => "exports/"+image.sha);
+      const signed = await admin.storage.from("studio-originals").createSignedUrls(paths,180);
+      if (signed.error || signed.data.some(entry => !entry.signedUrl)) return reply({error:"JPEG preview unavailable"},503);
+      return reply({snapshot:result.data,urls:signed.data.map(entry=>entry.signedUrl)});
+    }
     const item = path.match(/^inventory\/([A-Za-z0-9_-]{1,100})(\/rollback)?$/);
     if (item && ((req.method === "PATCH" && !item[2]) || (req.method === "POST" && item[2]))) {
       const raw = await req.text();
