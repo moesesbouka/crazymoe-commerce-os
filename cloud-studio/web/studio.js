@@ -50,16 +50,44 @@ function render() {
 }
 async function refresh() { items = await rpc("studio_state"); render(); }
 function notice(message) { get("message").hidden = !message; get("message").textContent = message; }
+async function openWorkspace(authSession) {
+  session = authSession;
+  await refresh();
+  get("login").hidden = true;
+  document.querySelector("aside").hidden = document.querySelector("main").hidden = false;
+}
+get("email-signin").onsubmit = async event => {
+  event.preventDefault();
+  const input = event.currentTarget.elements.link;
+  const button = event.currentTarget.querySelector("button");
+  button.disabled = true;
+  try {
+    const url = new URL(input.value.trim());
+    input.value = "";
+    const token = url.searchParams.get("token");
+    if (url.origin !== backend || url.pathname !== "/auth/v1/verify" ||
+        url.searchParams.get("type") !== "magiclink" || !token) {
+      throw Error("Copy the Log In link from your Studio sign-in email.");
+    }
+    await openWorkspace(await request("/auth/v1/verify", {
+      method:"POST", body:JSON.stringify({token_hash:token, type:"magiclink"})
+    }));
+  } catch(error) {
+    session = null;
+    get("login-status").textContent = error.message;
+  } finally {
+    input.value = "";
+    button.disabled = false;
+  }
+};
 get("signin").onsubmit = async event => {
   event.preventDefault();
   const login = event.currentTarget;
   login.querySelector("button").disabled = true;
   try {
-    session = await request("/auth/v1/token?grant_type=password", {method:"POST",body:JSON.stringify(Object.fromEntries(new FormData(login)))});
+    const result = await request("/auth/v1/token?grant_type=password", {method:"POST",body:JSON.stringify(Object.fromEntries(new FormData(login)))});
     login.elements.password.value = "";
-    await refresh();
-    get("login").hidden = true;
-    document.querySelector("aside").hidden = document.querySelector("main").hidden = false;
+    await openWorkspace(result);
   } catch(error) { session = null; get("login-status").textContent = error.message; }
   finally { login.querySelector("button").disabled = false; }
 };
