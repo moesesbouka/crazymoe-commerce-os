@@ -3,6 +3,7 @@ import base64
 import hashlib
 import io
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -37,11 +38,12 @@ for index,(token,indices) in enumerate([("a"*64,["0","1"]),("b"*64,["2"])]):
           "condition":["New","Used - Good"][index],"images":[{k:photos[i][k] for k in ("sha","bytes")} for i in indices]}
     payloads[token]={"item":item,"urls":[backend+"/fixture/"+i for i in indices]}
 with sync_playwright() as p, tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as profile:
-    ctx=p.chromium.launch_persistent_context(profile,channel="chromium",headless=True,
+    ctx=p.chromium.launch_persistent_context(profile,channel="chromium",headless=True,executable_path=os.environ.get("STUDIO_TEST_CHROMIUM"),
         args=["--disable-background-networking",f"--disable-extensions-except={extension}",f"--load-extension={extension}"])
     try:
         w=ctx.service_workers[0] if ctx.service_workers else ctx.wait_for_event("serviceworker")
         manifest=w.evaluate("chrome.runtime.getManifest().version")
+        gallery=manifest.startswith("68.")
         extid=w.evaluate("chrome.runtime.id")
         # Pin outbound traffic in the isolated worker. Only two fake claims and their JPEGs can succeed.
         w.evaluate("""({payloads,photos,backend})=>{
@@ -60,6 +62,7 @@ with sync_playwright() as p, tempfile.TemporaryDirectory(ignore_cleanup_errors=T
         }""",{"payloads":payloads,"photos":photos,"backend":backend})
         cursor={"batch_id":"office-history","item_id":"office-cursor"}
         w.evaluate("cursor=>chrome.storage.local.set({moeLocalCursor:cursor,lastDraft:{title:'Old electric bike'}})",cursor)
+        if gallery:w.evaluate("cursor=>chrome.storage.local.set({moeNgkCursor:cursor})",cursor)
         page=ctx.new_page()
         def route(r):
             url=r.request.url
@@ -68,6 +71,8 @@ with sync_playwright() as p, tempfile.TemporaryDirectory(ignore_cleanup_errors=T
             else:r.abort()
         ctx.route("**/*",route)
         page.goto(studio+"/app/")
+        if gallery:
+            assert page.evaluate("id=>chrome.runtime.sendMessage(id,{type:'STUDIO_CHECK_HANDOFF'})",extid)=={"ready":True}
         def open_form(token):
             with ctx.expect_page() as opened:
                 reply=page.evaluate("([id,token])=>chrome.runtime.sendMessage(id,{type:'STUDIO_APPROVED_DRAFT',token})",[extid,token])
@@ -82,10 +87,10 @@ with sync_playwright() as p, tempfile.TemporaryDirectory(ignore_cleanup_errors=T
             assert tab.get_by_label("Title",exact=True).input_value()==""
             # The batch uploader belongs to the extension. Put its picker first
             # in DOM order, as can happen while Facebook rebuilds its form.
-            tab.locator("#cm-root").wait_for(state="attached")
-            tab.evaluate("document.body.prepend(document.querySelector('#cm-root'))")
+            if not gallery:tab.locator("#cm-root").wait_for(state="attached")
+            if not gallery:tab.evaluate("document.body.prepend(document.querySelector('#cm-root'))")
             button.click()
-            tab.wait_for_function("""()=>document.querySelector('#__moe_local_batch__')?.innerText.includes('Verified cloud draft:')""",timeout=20000)
+            tab.wait_for_function("""()=>document.querySelector('#__moe_local_batch__,#__moe_approved_panel__')?.innerText.includes('Verified cloud draft')""",timeout=20000)
             item=data["item"]
             for field in ["Title","Price","Description","Condition"]:
                 assert tab.get_by_label(field,exact=True).input_value()==item[field.lower()]
@@ -96,10 +101,11 @@ with sync_playwright() as p, tempfile.TemporaryDirectory(ignore_cleanup_errors=T
         tab,button=open_form("c"*64)
         tab.get_by_label("Title",exact=True).fill("Seller's existing draft")
         button.click()
-        tab.wait_for_function("""()=>document.querySelector('#__moe_local_batch__').innerText.includes('Existing Facebook draft detected')""")
+        tab.wait_for_function("""()=>/Existing Facebook draft detected|existing draft is preserved/.test(document.querySelector('#__moe_local_batch__,#__moe_approved_panel__').innerText)""")
         assert tab.get_by_label("Title",exact=True).input_value()=="Seller's existing draft"
         state=w.evaluate("chrome.storage.local.get(['moeLocalCursor','moeLocalPending','moeLocalUnconfirmed'])")
         assert state=={"moeLocalCursor":cursor},state
+        if gallery:assert w.evaluate("chrome.storage.local.get('moeNgkCursor')")=={"moeNgkCursor":cursor}
         calls=w.evaluate("probeCalls")
         assert len(calls)==5,calls
         print(json.dumps({"installed_version":manifest,"extension_id":extid,"distinct_drafts":2,"jpeg_hashes_verified":3,

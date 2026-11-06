@@ -264,8 +264,12 @@ get("transfer-export").onclick=async ()=>{
   try {
     if(Object.keys(patch()).length)throw Error("Save changes and approve the updated draft first.");
     if(!globalThis.chrome?.runtime?.sendMessage)throw Error("Open Studio in Chrome with the Commerce OS extension enabled.");
+    let extensionId="kbdeepgfbofgljhijkdejmodfhfeeplh";
+    const galleryId="jhkkefonggnemmdpaahpnkgcgfjibeal";
+    const gallery=await chrome.runtime.sendMessage(galleryId,{type:"STUDIO_CHECK_HANDOFF"}).catch(()=>null);
+    if(gallery?.ready)extensionId=galleryId;
     const token=await rpc("studio_issue_handoff",{p_item:current.id,p_revision:current.revision});
-    const answer=await chrome.runtime.sendMessage("kbdeepgfbofgljhijkdejmodfhfeeplh",{type:"STUDIO_APPROVED_DRAFT",token});
+    const answer=await chrome.runtime.sendMessage(extensionId,{type:"STUDIO_APPROVED_DRAFT",token});
     if(!answer?.ok)throw Error("Commerce OS could not open the draft.");
     get("editor-status").textContent="In the Facebook tab, choose Load next approved product.";
   }catch(error){get("editor-status").textContent=error.message;}
