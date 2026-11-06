@@ -182,3 +182,24 @@ create trigger studio_intake_render after insert on studio_core.photo_selection
  for each row execute function studio_core.enqueue_intake_render();
 create trigger studio_intake_render_revision after update of revision on studio_core.listing_authoring
  for each row when (old.revision is distinct from new.revision) execute function studio_core.enqueue_intake_render();
+
+create function public.studio_render_status(p_item text) returns jsonb
+language plpgsql stable security definer set search_path='' as $$
+declare a studio_core.listing_authoring; s studio_core.photo_selection; job_state text; result text;
+begin
+ if not studio_core.is_member() then raise exception 'Studio access denied' using errcode='42501';end if;
+ select * into strict a from studio_core.listing_authoring where inventory_id=p_item;
+ select * into strict s from studio_core.photo_selection where inventory_id=p_item;
+ if s.exports_verified and exists(select 1 from studio_core.export_sets where inventory_id=p_item and selection=s.selection) then result:='ready';
+ else
+ select state into job_state from studio_core.jobs where inventory_id=p_item and kind='render'
+ and payload->>'listing_revision'=a.revision::text and payload->>'photo_revision'=s.revision::text
+ order by created_at desc limit 1;
+ result:=case when job_state in ('queued','running') then job_state when job_state='failed' then 'failed'
+ when jsonb_array_length(s.selection)=0 then 'needs_photos'
+ when jsonb_array_length(s.selection)>10 then 'selection_limit' else 'not_prepared' end;
+ end if;
+ return jsonb_build_object('state',result,'revision',a.revision,'photo_revision',s.revision);
+end $$;
+revoke all on function public.studio_render_status(text) from public,anon,authenticated,service_role;
+grant execute on function public.studio_render_status(text) to authenticated;

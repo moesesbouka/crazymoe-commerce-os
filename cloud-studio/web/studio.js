@@ -149,7 +149,9 @@ async function preview(photo) {
     if (sequence === photoRequest) { get("hero").src = result.url; get("photo-status").textContent = ""; }
   } catch(error) { if (sequence === photoRequest) get("photo-status").textContent = error.message; }
 }
+let stopRenderStatus = () => {};
 function openItem(item) {
+  stopRenderStatus();
   current = item;
   get("transfer-export").hidden = item.status !== "approved";
   get("edit-title").textContent = title(item);
@@ -191,6 +193,13 @@ function openItem(item) {
   }));
   if (photos.length) preview(photos[0]);
   if (!get("editor").open) get("editor").showModal();
+  get("review-export").disabled = true;
+  get("render-status").textContent = "Checking listing photos…";
+  stopRenderStatus = studioRenderStatus.watch({
+    read:()=>rpc("studio_render_status",{p_item:item.id}), revision:item.revision,
+    active:()=>get("editor").open && current===item,
+    show:(message,ready)=>{get("render-status").textContent=message;get("review-export").disabled=!ready;}
+  });
 }
 function patch() {
   return Object.fromEntries(fields.filter(key => form.elements[key].value !== form.elements[key].dataset.initial)
