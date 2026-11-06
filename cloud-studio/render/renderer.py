@@ -126,6 +126,9 @@ def _crop_bounds(rgb):
     small=cv2.resize(rgb,(max(32,round(w*scale)),max(32,round(h*scale))),
                      interpolation=cv2.INTER_AREA)
     sh,sw=small.shape[:2]
+    # Uniform images cannot identify a foreground. Avoid degenerate GrabCut
+    # clustering, which can consume the entire serverless execution budget.
+    if np.all(small == small[0,0]):return (0,0,w,h),"low_confidence"
     # GrabCut probable fg inside inset rectangle, using an actual product
     # photograph rather than a generated/segmented replacement background.
     margin=max(3,int(min(sw,sh)*.035))
@@ -164,6 +167,7 @@ def _mask_and_score(rgb):
     sw=max(100,round(w*min(1.,600/max(h,w))))
     sh=max(100,round(h*min(1.,600/max(h,w))))
     tiny=cv2.resize(rgb,(sw,sh),interpolation=cv2.INTER_AREA)
+    if np.all(tiny == tiny[0,0]):return None,0.0,"foreground_fraction_unreliable"
     margin=max(9,round(min(sw,sh)*.045))
     rect=(margin,margin,sw-margin*2,sh-margin*2)
     mark=np.zeros((sh,sw),np.uint8)

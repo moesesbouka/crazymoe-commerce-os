@@ -28,3 +28,17 @@ a real render acceptance test. No live render jobs were queued by this checkpoin
 Worker dispatch, automatic intake enqueue, UI wiring and real-product acceptance remain
 unfinished. To pause this feature without deleting evidence or job history, run
 `pause_render_queue.sql`; do not drop or truncate shared jobs.
+
+## Machine transport checkpoint
+
+`api/process_render.py` accepts only authenticated worker requests using a server-only
+`STUDIO_RENDER_SECRET` of at least 64 characters. It downloads a bounded, signed URL
+from this project's private originals bucket, rejects redirects, verifies source size
+and SHA-256, and returns a decoded/verified 1600px JPEG. It holds no database credentials
+and performs no storage writes, approval or publication. Uniform sources bypass
+degenerate foreground clustering and retain the conservative natural fallback.
+
+Transport tests cover authentication before network access, URL restrictions, source
+integrity and actual JPEG output. Twelve renderer/endpoint tests pass, including six
+same-runtime byte comparisons against the captured office recipe. Worker orchestration,
+private output upload verification and live queue execution remain unfinished.
