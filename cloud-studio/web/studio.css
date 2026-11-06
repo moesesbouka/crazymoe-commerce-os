@@ -31,5 +31,6 @@
 .card img:not([src]){visibility:hidden}
 #thumbs .thumb{padding:4px;min-width:78px}
 #thumbs .thumb img{display:block;width:66px;height:66px}
+.catalog-evidence{border:1px solid #dce3e9;background:#fafcfd;border-radius:10px;margin:0 0 20px;padding:12px 14px}.catalog-evidence>summary{cursor:pointer;font-weight:730;color:#365773;font-size:13px}.catalog-evidence[open]>summary{margin-bottom:12px}.catalog-record{border-top:1px solid #e5ebef;padding:9px 0;font-size:12px;line-height:1.5}.catalog-record strong,.catalog-record small{display:block}.catalog-record a{overflow-wrap:anywhere}.catalog-record small,#catalog-evidence-status{color:#657787}.catalog-evidence .field-row{margin-top:12px}.catalog-evidence label{margin-bottom:12px}.catalog-evidence button{margin-bottom:8px}
 @media(max-width:700px){.inventory-card .body strong{font-size:12px}.inventory-card .body small{font-size:11px}}
 

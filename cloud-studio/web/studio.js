@@ -150,6 +150,28 @@ async function preview(photo) {
   } catch(error) { if (sequence === photoRequest) get("photo-status").textContent = error.message; }
 }
 let stopRenderStatus = () => {};
+function renderCatalogEvidence(item) {
+  const list = get("catalog-evidence-list");
+  list.replaceChildren(...(item.catalog_evidence || []).map(record => {
+    const row=document.createElement("div"),heading=document.createElement("strong"),link=document.createElement("a"),meta=document.createElement("small");
+    row.className="catalog-record";heading.textContent=(record.source_kind === "manufacturer" ? "Manufacturer" : "Retailer")+": "+record.product_name;
+    link.href=record.url;link.target="_blank";link.rel="noopener noreferrer";link.textContent=record.url;
+    meta.textContent=[record.brand,record.model,"listing revision "+record.based_on_listing_revision].filter(Boolean).join(" · ");
+    row.append(heading,link,meta);return row;
+  }));
+  if (!(item.catalog_evidence || []).length) {
+    const empty=document.createElement("p");empty.className="muted";empty.textContent="No reviewed web evidence recorded yet.";list.append(empty);
+  }
+  const candidate=item.research?.catalog_match || {};
+  get("catalog-kind").value="manufacturer";
+  get("catalog-url").value="";
+  get("catalog-name").value=String(candidate.product_name || candidate.title || title(item));
+  get("catalog-brand").value=String(candidate.brand || "");
+  get("catalog-model").value=String(candidate.model || item.fields.model || "");
+  get("catalog-note").value="";
+  get("catalog-evidence-status").textContent=item.identity_revision == null ? "Identification must exist before evidence can be recorded." : "";
+  get("record-catalog-evidence").disabled=item.identity_revision == null;
+}
 function openItem(item) {
   stopRenderStatus();
   current = item;
@@ -163,6 +185,7 @@ function openItem(item) {
     input.dataset.initial = input.value;
   }
   get("diagnostics").textContent = statusLabel[item.status] + " · Revision " + item.revision;
+  renderCatalogEvidence(item);
   const evidence = item.visual_proposal;
   if (evidence) {
     const panel = document.createElement("details"), caption = document.createElement("summary");
@@ -195,6 +218,21 @@ function openItem(item) {
   if (!get("editor").open) get("editor").showModal();
   monitorRender(item);
 }
+get("record-catalog-evidence").onclick=async()=>{
+  const item=current,status=get("catalog-evidence-status"),button=get("record-catalog-evidence");
+  if(Object.keys(patch()).length){status.textContent="Save your listing edits before recording evidence.";return;}
+  const inputs=["catalog-url","catalog-name","catalog-brand","catalog-model"];
+  if(inputs.some(id=>!get(id).value.trim())){status.textContent="Enter the URL, product name, brand and model.";return;}
+  button.disabled=true;status.textContent="Recording evidence…";
+  try{
+    await rpc("studio_add_catalog_evidence",{p_item:item.id,p_listing_revision:item.revision,p_identity_revision:item.identity_revision,
+      p_source_kind:get("catalog-kind").value,p_url:get("catalog-url").value.trim(),p_product_name:get("catalog-name").value.trim(),
+      p_brand:get("catalog-brand").value.trim(),p_model:get("catalog-model").value.trim(),p_evidence:{seller_note:get("catalog-note").value.trim()}});
+    await refresh();const updated=items.find(product=>product.id===item.id);if(!updated)throw Error("Recorded, but product is no longer available.");
+    openItem(updated);get("catalog-evidence-status").textContent="Evidence recorded without changing the listing.";
+  }catch(error){if(current===item)status.textContent=error.message;}
+  finally{if(current===item)button.disabled=false;}
+};
 function monitorRender(item) {
   stopRenderStatus();
   get("retry-render").hidden = true;
