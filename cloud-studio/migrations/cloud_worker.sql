@@ -148,3 +148,37 @@ begin
 end $$;
 revoke all on function public.studio_render_context(uuid,int,text) from public,anon,authenticated;
 grant execute on function public.studio_render_context(uuid,int,text) to service_role;
+
+-- Only verified cloud intake products receive automatic preparation.
+create function studio_core.enqueue_intake_render() returns trigger
+language plpgsql security definer set search_path='' as $$
+declare a studio_core.listing_authoring; s studio_core.photo_selection; uploader uuid; key text;
+begin
+ if new.inventory_id not like 'cloud-%' then return new;end if;
+ select (evidence->>'uploaded_by')::uuid into uploader from studio_core.product_identity where inventory_id=new.inventory_id;
+ if uploader is null or not exists(select 1 from studio_core.members where user_id=uploader and enabled) then return new;end if;
+ select * into a from studio_core.listing_authoring where inventory_id=new.inventory_id for update;
+ select * into s from studio_core.photo_selection where inventory_id=new.inventory_id for update;
+ if a.inventory_id is null or s.inventory_id is null or a.status<>'review' or s.exports_verified
+ or not exists(select 1 from studio_core.inventory where id=new.inventory_id and lifecycle='current')
+ or exists(select 1 from studio_core.export_sets where inventory_id=new.inventory_id)
+ or jsonb_array_length(s.selection) not between 1 and 10 then return new;end if;
+ if exists(select 1 from jsonb_array_elements(s.selection) p left join studio_core.photo_assets f on f.sha256=p->>'sha'
+ where p->>'kind' is distinct from 'real' or f.cloud_verified_at is null or f.bucket<>'studio-originals'
+ or f.bytes not between 1 and 16000000 or coalesce(p->>'style_mode','natural') not in ('natural','blur','brand')
+ or (p ? 'pop' and jsonb_typeof(p->'pop')<>'boolean')) then return new;end if;
+ key:=new.inventory_id||':render:'||a.revision||':'||s.revision;
+ -- Cancel only work that has not started. Running workers still validate their snapshot at finish.
+ update studio_core.jobs set state='failed',last_error='Superseded before rendering'
+ where inventory_id=new.inventory_id and kind='render' and state='queued' and idempotency_key<>key;
+ insert into studio_core.jobs(inventory_id,kind,idempotency_key,payload,available_at)
+ values(new.inventory_id,'render',key,jsonb_build_object('listing_revision',a.revision,'photo_revision',s.revision,
+ 'selection',s.selection,'requested_by',uploader,'recipe','existing-finish-v4-pop-v1-cloud1'),now()+interval '10 seconds')
+ on conflict(idempotency_key) do nothing;
+ return new;
+end $$;
+revoke all on function studio_core.enqueue_intake_render() from public,anon,authenticated,service_role;
+create trigger studio_intake_render after insert on studio_core.photo_selection
+ for each row execute function studio_core.enqueue_intake_render();
+create trigger studio_intake_render_revision after update of revision on studio_core.listing_authoring
+ for each row when (old.revision is distinct from new.revision) execute function studio_core.enqueue_intake_render();

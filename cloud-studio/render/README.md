@@ -56,8 +56,22 @@ Live cloud acceptance of this component processed batches of two, four and ten v
 inventory originals on separate test records. All jobs succeeded on their first attempt, stored
 and re-downloaded every JPEG, and preserved seller fields and historical export sets.
 Test records are archived and excluded from the active Studio list. The cron dispatcher
-runs only when eligible render jobs exist. Intake enqueue and owner-facing render controls
-remain unfinished; no full workflow acceptance is claimed. The ten-photo test used the
+runs only when eligible render jobs exist. Owner-facing render controls remain unfinished;
+no full workflow acceptance is claimed. The ten-photo test used the
 largest currently selected verified originals, mixed natural/blur/brand styles and Pop,
 and was picked up by the cloud cron dispatcher. All ten stored receipts matched the
 requested source order. This validates that batch, not an unlimited throughput claim.
+
+Automatic preparation now applies to new cloud-intake products with one to ten verified
+inventory originals, each no larger than 16,000,000 bytes. Photo-selection insertion queues
+the current immutable snapshot. Seller revision updates supersede waiting jobs and queue
+the saved revision; running workers still reject changed snapshots at registration.
+Approved products and historical exports are excluded. Eleven/twelve-photo uploads are
+preserved but not automatically rendered by this bounded worker. The transaction test
+checks enqueue, revision replacement, idempotency, approval isolation and private grants.
+Owner upload-entry-point acceptance of this integration remains pending.
+
+The pause script disables both automatic triggers and the render cron job. Resume requires
+enabling `studio_intake_render` on `studio_core.photo_selection` and
+`studio_intake_render_revision` on `studio_core.listing_authoring`, restoring the request
+grant, and reapplying the render schedule. No saved inventory or jobs are deleted.
