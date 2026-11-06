@@ -25,8 +25,8 @@ exclusive leases, incomplete receipts, in-flight photo changes, successful trans
 registration, protected historical exports and grants. It uses synthetic inventory and
 an existing storage object as a receipt fixture, then rolls everything back. It is not
 a real render acceptance test. No live render jobs were queued by this checkpoint.
-Worker dispatch, automatic intake enqueue, UI wiring and real-product acceptance remain
-unfinished. To pause this feature without deleting evidence or job history, run
+Automatic intake enqueue, UI wiring and real-product acceptance remain
+unfinished. To pause requests without deleting evidence or job history, run
 `pause_render_queue.sql`; do not drop or truncate shared jobs.
 
 ## Machine transport checkpoint
@@ -40,5 +40,14 @@ degenerate foreground clustering and retain the conservative natural fallback.
 
 Transport tests cover authentication before network access, URL restrictions, source
 integrity and actual JPEG output. Twelve renderer/endpoint tests pass, including six
-same-runtime byte comparisons against the captured office recipe. Worker orchestration,
-private output upload verification and live queue execution remain unfinished.
+same-runtime byte comparisons against the captured office recipe.
+
+`../render-worker/` connects a leased job to the machine renderer using service-only
+context from Vault. It signs each private source, preserves selection order and recipe
+options, uploads content-addressed output without replacing existing objects, then
+downloads and hashes the stored JPEG before registration. The Python transport verifies
+full JPEG decoding and geometry; the Edge worker verifies stored byte identity. Its
+110-second processing budget leaves time for recording failure and retry state. This
+does not establish worst-case throughput for ten large images. Four orchestration tests
+cover ordering, retries, malformed output and storage corruption. No automatic schedule
+or intake integration is enabled by this source checkpoint.

@@ -127,3 +127,24 @@ end $$;
 revoke all on function public.studio_request_render(text,bigint,bigint),public.studio_render_claim(text),public.studio_render_finish(uuid,int,jsonb,text) from public,anon,authenticated,service_role;
 grant execute on function public.studio_request_render(text,bigint,bigint) to authenticated;
 grant execute on function public.studio_render_claim(text),public.studio_render_finish(uuid,int,jsonb,text) to service_role;
+
+-- Service-only context for a currently leased render; credentials never reach Studio.
+create function public.studio_render_context(p_job uuid,p_attempt int,p_token text) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare j studio_core.jobs; photos jsonb; credential text;
+begin
+ if p_token is null or not exists(select 1 from vault.decrypted_secrets where name='studio_worker_token' and decrypted_secret=p_token)
+ then raise exception 'Invalid worker credential' using errcode='42501';end if;
+ select * into strict j from studio_core.jobs where id=p_job and kind='render' and state='running'
+ and attempts=p_attempt and lease_until>now();
+ select decrypted_secret into credential from vault.decrypted_secrets where name='studio_render_secret';
+ if credential is null or length(credential)<64 then raise exception 'Renderer not configured';end if;
+ select jsonb_agg(jsonb_build_object('sha256',a.sha256,'bucket',a.bucket,'object_path',a.object_path,'bytes',a.bytes) order by p.ord)
+ into photos from jsonb_array_elements(j.payload->'selection') with ordinality p(photo,ord)
+ join studio_core.photo_assets a on a.sha256=p.photo->>'sha' and a.cloud_verified_at is not null
+ and a.bucket='studio-originals' and a.bytes between 1 and 16000000 where p.photo->>'kind'='real';
+ if photos is null or jsonb_array_length(photos)<>jsonb_array_length(j.payload->'selection') then raise exception 'Unverified render source';end if;
+ return jsonb_build_object('photos',photos,'endpoint','https://crazymoe-marketplace-studio.vercel.app/api/process_render','secret',credential);
+end $$;
+revoke all on function public.studio_render_context(uuid,int,text) from public,anon,authenticated;
+grant execute on function public.studio_render_context(uuid,int,text) to service_role;

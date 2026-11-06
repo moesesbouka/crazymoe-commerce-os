@@ -20,6 +20,10 @@ begin
  if exists(select 1 from studio_core.jobs where kind='render' and id<>j and state in ('queued','running')) then raise exception 'Another renderer is active';end if;
  claimed:=public.studio_render_claim(token);
  if claimed->>'id'<>j::text or claimed->>'attempt'<>'1' then raise exception 'Claim mismatch';end if;
+ if public.studio_render_context(j,1,token)->'photos'->0->>'sha256'<>photo then raise exception 'Worker source context mismatch';end if;
+ begin perform public.studio_render_context(j,1,'invalid');raise exception 'Unauthenticated context accepted';exception when insufficient_privilege then null;end;
+ if has_function_privilege('authenticated','public.studio_render_context(uuid,int,text)','EXECUTE')
+ or has_function_privilege('anon','public.studio_render_context(uuid,int,text)','EXECUTE') then raise exception 'Renderer secret exposed';end if;
  if public.studio_render_claim(token) is not null then raise exception 'Active lease was claimed twice';end if;
  begin perform public.studio_render_finish(j,2,'[]',null);raise exception 'Stale attempt accepted';exception when raise_exception then if sqlerrm='Stale attempt accepted' then raise;end if;end;
  begin perform public.studio_render_finish(j,1,'[]',null);raise exception 'Incomplete set accepted';exception when raise_exception then if sqlerrm='Incomplete set accepted' then raise;end if;end;
