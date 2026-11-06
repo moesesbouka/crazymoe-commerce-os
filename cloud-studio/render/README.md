@@ -52,10 +52,12 @@ four photo transports run concurrently; receipts retain source order even when r
 finish in a different order. Five orchestration tests cover ordering, ten-source bounded
 concurrency, retries, malformed output and storage corruption.
 
-Live cloud acceptance of this component processed two, then four verified inventory
-originals on separate test records. Both jobs succeeded on their first attempt, stored
+Live cloud acceptance of this component processed batches of two, four and ten verified
+inventory originals on separate test records. All jobs succeeded on their first attempt, stored
 and re-downloaded every JPEG, and preserved seller fields and historical export sets.
 Test records are archived and excluded from the active Studio list. The cron dispatcher
 runs only when eligible render jobs exist. Intake enqueue and owner-facing render controls
-remain unfinished; no full workflow acceptance is claimed. Ten large real photos still
-need a throughput acceptance run before claiming that batch size is supported in practice.
+remain unfinished; no full workflow acceptance is claimed. The ten-photo test used the
+largest currently selected verified originals, mixed natural/blur/brand styles and Pop,
+and was picked up by the cloud cron dispatcher. All ten stored receipts matched the
+requested source order. This validates that batch, not an unlimited throughput claim.
