@@ -47,3 +47,83 @@ begin
 end $$;
 revoke all on function public.studio_worker_claim(text),public.studio_worker_finish(uuid,int,bigint,jsonb,text) from public,anon,authenticated;
 grant execute on function public.studio_worker_claim(text),public.studio_worker_finish(uuid,int,bigint,jsonb,text) to service_role;
+-- Reuse the private durable job queue; never replace a verified historical export.
+create function public.studio_request_render(p_item text,p_revision bigint,p_photo_revision bigint) returns uuid
+language plpgsql security definer set search_path='' as $$
+declare a studio_core.listing_authoring; s studio_core.photo_selection; job_id uuid;
+begin
+ if not studio_core.is_member() then raise exception 'Studio access denied' using errcode='42501';end if;
+ select * into strict a from studio_core.listing_authoring where inventory_id=p_item for update;
+ select * into strict s from studio_core.photo_selection where inventory_id=p_item for update;
+ if a.revision<>p_revision or s.revision<>p_photo_revision then raise exception 'Selection changed' using errcode='40001';end if;
+ if a.status<>'review' or not exists(select 1 from studio_core.inventory where id=p_item and lifecycle='current')
+ or s.exports_verified or exists(select 1 from studio_core.export_sets where inventory_id=p_item)
+ then raise exception 'Use the existing export or current review product';end if;
+ if jsonb_array_length(s.selection) not between 1 and 10 then raise exception 'Select one to ten photos';end if;
+ -- First production renderer scope: verified inventory originals. Manufacturer and focus rules need their own evidence.
+ if exists(select 1 from jsonb_array_elements(s.selection) p left join studio_core.photo_assets f on f.sha256=p->>'sha'
+ where p->>'kind' is distinct from 'real' or f.cloud_verified_at is null or f.bytes>16000000
+ or coalesce(p->>'style_mode','natural') not in ('natural','blur','brand')) then raise exception 'Unverified render source';end if;
+ insert into studio_core.jobs(inventory_id,kind,idempotency_key,payload)
+ values(p_item,'render',p_item||':render:'||p_revision||':'||p_photo_revision,
+ jsonb_build_object('listing_revision',p_revision,'photo_revision',p_photo_revision,'selection',s.selection,'requested_by',auth.uid(),'recipe','existing-finish-v4-pop-v1-cloud1'))
+ on conflict(idempotency_key) do nothing returning id into job_id;
+ if job_id is null then select id into strict job_id from studio_core.jobs where idempotency_key=p_item||':render:'||p_revision||':'||p_photo_revision;end if;
+ return job_id;
+end $$;
+
+create function public.studio_render_claim(p_token text) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare j studio_core.jobs;
+begin
+ if p_token is null or not exists(select 1 from vault.decrypted_secrets where name='studio_worker_token' and decrypted_secret=p_token)
+ then raise exception 'Invalid worker credential' using errcode='42501';end if;
+ update studio_core.jobs set state='failed',last_error='Final render lease expired',lease_until=null
+ where kind='render' and state='running' and attempts>=3 and lease_until<=now();
+ with candidate as (select id from studio_core.jobs where kind='render' and attempts<3
+ and ((state='queued' and available_at<=now()) or (state='running' and lease_until<=now()))
+ order by available_at,created_at for update skip locked limit 1)
+ update studio_core.jobs q set state='running',attempts=q.attempts+1,lease_until=now()+interval '5 minutes'
+ from candidate where q.id=candidate.id returning q.* into j;
+ if j.id is null then return null;end if;
+ return jsonb_build_object('id',j.id,'attempt',j.attempts,'inventory_id',j.inventory_id,'snapshot',j.payload);
+end $$;
+
+create function public.studio_render_finish(p_job uuid,p_attempt int,p_images jsonb,p_failure text) returns boolean
+language plpgsql security definer set search_path='' as $$
+declare j studio_core.jobs; a studio_core.listing_authoring; s studio_core.photo_selection;
+begin
+ -- Match editor lock order before acquiring the job lock to avoid deadlocks.
+ select * into strict j from studio_core.jobs where id=p_job and kind='render';
+ select * into strict a from studio_core.listing_authoring where inventory_id=j.inventory_id for update;
+ select * into strict s from studio_core.photo_selection where inventory_id=j.inventory_id for update;
+ select * into strict j from studio_core.jobs where id=p_job for update;
+ if j.state<>'running' or j.attempts<>p_attempt or j.lease_until is null or j.lease_until<=now() then raise exception 'Render lease expired';end if;
+ if a.revision<>(j.payload->>'listing_revision')::bigint or s.revision<>(j.payload->>'photo_revision')::bigint
+ or s.selection is distinct from j.payload->'selection' or s.exports_verified or a.status<>'review'
+ or not exists(select 1 from studio_core.inventory where id=j.inventory_id and lifecycle='current')
+ or exists(select 1 from studio_core.export_sets where inventory_id=j.inventory_id) then
+ update studio_core.jobs set state='failed',last_error='Render snapshot changed',lease_until=null where id=j.id;return false;end if;
+ if p_failure is not null then
+ update studio_core.jobs set state=case when attempts>=3 then 'failed' else 'queued' end,
+ last_error=left(p_failure,200),available_at=now()+interval '5 minutes',lease_until=null where id=j.id;return false;end if;
+ if jsonb_typeof(p_images) is distinct from 'array' or jsonb_array_length(p_images)<>jsonb_array_length(s.selection)
+ then raise exception 'Incomplete render set';end if;
+ -- Trusted worker must upload, download and hash each JPEG before this call.
+ if exists(select 1 from jsonb_array_elements(p_images) with ordinality x(i,ord)
+ left join storage.objects o on o.bucket_id='studio-originals' and o.name='exports/'||(i->>'sha')
+ where coalesce(i->>'sha','') !~ '^[0-9a-f]{64}$' or coalesce((i->>'bytes')::bigint,0) not between 1 and 4000000
+ or (o.metadata->>'size')::bigint is distinct from (i->>'bytes')::bigint
+ or i->>'width' is distinct from '1600' or i->>'height' is distinct from '1600'
+ or i->>'source_sha' is distinct from s.selection->(ord::int-1)->>'sha'
+ or i->>'recipe' is distinct from j.payload->>'recipe') then raise exception 'Render receipt mismatch';end if;
+ insert into studio_core.export_sets(inventory_id,selection,images) values(j.inventory_id,s.selection,p_images);
+ insert into studio_core.photo_choices(inventory_id,position,choice,source,image)
+ select j.inventory_id,ord,i->>'sha',s.selection->(ord::int-1),i from jsonb_array_elements(p_images) with ordinality x(i,ord);
+ update studio_core.photo_selection set exports_verified=true where inventory_id=j.inventory_id;
+ update studio_core.jobs set state='succeeded',last_error=null,lease_until=null where id=j.id;
+ return true;
+end $$;
+revoke all on function public.studio_request_render(text,bigint,bigint),public.studio_render_claim(text),public.studio_render_finish(uuid,int,jsonb,text) from public,anon,authenticated,service_role;
+grant execute on function public.studio_request_render(text,bigint,bigint) to authenticated;
+grant execute on function public.studio_render_claim(text),public.studio_render_finish(uuid,int,jsonb,text) to service_role;
