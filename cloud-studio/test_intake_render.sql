@@ -19,6 +19,15 @@ begin
  update studio_core.listing_authoring set status='approved',revision=3 where inventory_id=item;
  if (select count(*) from studio_core.jobs where inventory_id=item)<>2 then raise exception 'Approved item auto-rendered';end if;
  if (select fields->>'title' from studio_core.listing_authoring where inventory_id=item)<>'Seller changed title' then raise exception 'Seller edit overwritten';end if;
+ update studio_core.photo_selection set selection=(select jsonb_agg(selected->0) from generate_series(1,12)) where inventory_id=item;
+ update studio_core.listing_authoring set status='review',revision=4 where inventory_id=item;
+ if (select count(*) from studio_core.jobs where inventory_id=item)<>2 then raise exception 'Oversized selection queued';end if;
+ update studio_core.photo_selection set selection='[{"kind":"real","sha":"unverified"}]' where inventory_id=item;
+ update studio_core.listing_authoring set revision=5 where inventory_id=item;
+ if (select count(*) from studio_core.jobs where inventory_id=item)<>2 then raise exception 'Unverified source queued';end if;
+ update studio_core.photo_selection set selection=selected,exports_verified=true where inventory_id=item;
+ update studio_core.listing_authoring set revision=6 where inventory_id=item;
+ if (select count(*) from studio_core.jobs where inventory_id=item)<>2 then raise exception 'Existing exports requeued';end if;
  if has_function_privilege('authenticated','studio_core.enqueue_intake_render()','EXECUTE') or has_function_privilege('anon','studio_core.enqueue_intake_render()','EXECUTE') then raise exception 'Private trigger exposed';end if;
 end $$;
 rollback;
