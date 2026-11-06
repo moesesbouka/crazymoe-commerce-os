@@ -12,6 +12,16 @@ chrome.runtime.onMessageExternal.addListener((message,sender,reply)=>{
   return true;
 });
 chrome.tabs.onRemoved.addListener(id=>{chrome.storage.session.remove("studioDraft"+id);});
+// Report only whether this tab is assigned to a Studio transfer. The token stays in the worker.
+chrome.runtime.onMessage.addListener((message,sender,reply)=>{
+  if(message?.type!=="STUDIO_TRANSFER_MODE") return false;
+  const url=new URL(sender.url || "about:blank");
+  if(sender.frameId!==0 || !sender.tab?.id || !["https://www.facebook.com","https://m.facebook.com"].includes(url.origin)
+     || !url.pathname.startsWith("/marketplace/create/")) {reply({ok:false});return false;}
+  const key="studioDraft"+sender.tab.id;
+  chrome.storage.session.get(key).then(state=>reply({ok:true,cloud:Boolean(state[key])})).catch(()=>reply({ok:false}));
+  return true;
+});
 async function studioCloudNext(tabId,action){
   const key="studioDraft"+tabId;
   const token=(await chrome.storage.session.get(key))[key];
@@ -35,5 +45,5 @@ async function studioCloudNext(tabId,action){
     for(let j=0;j<bytes.length;j+=8192)binary+=String.fromCharCode(...bytes.subarray(j,j+8192));
     imageBlobs.push({dataUrl:"data:image/jpeg;base64,"+btoa(binary),mimeType:"image/jpeg",name:"CrazyMoe_"+(i+1)+".jpg"});
   }
-  return {ok:true,empty:false,batch_id:"cloud-"+item.id+"-"+item.revision,item:{...item,item_id:item.id,imageBlobs}};
+  return {ok:true,source:"studio",empty:false,batch_id:"cloud-"+item.id+"-"+item.revision,item:{...item,item_id:item.id,imageBlobs}};
 }
