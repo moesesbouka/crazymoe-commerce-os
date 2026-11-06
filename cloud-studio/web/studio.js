@@ -28,11 +28,20 @@ async function request(url, options = {}) {
   return body;
 }
 const rpc = (name, args = {}) => request("/rest/v1/rpc/" + name, {method:"POST", body:JSON.stringify(args)});
-const title = item => item.fields.title || item.generated_candidate?.title || item.id;
+// Missing migrated fields may use prepared suggestions; explicit seller values,
+// including empty strings, always win. Suggestions are persisted before review.
+function editorValue(item, key) {
+  if (Object.hasOwn(item.fields, key)) return String(item.fields[key] ?? "");
+  if (key === "condition") return "New";
+  if (["title", "model", "price", "description", "source_url"].includes(key))
+    return String(item.generated_candidate?.[key] ?? "");
+  return "";
+}
+const title = item => editorValue(item, "title") || item.id;
 const matchesView = (item, key) => key === "all" || item.status === (key === "ready" ? "approved" : key);
 function filtered() {
   const query = get("search").value.trim().toLowerCase();
-  return items.filter(item => matchesView(item, view) && [title(item),item.fields.model,item.id].join(" ").toLowerCase().includes(query));
+  return items.filter(item => matchesView(item, view) && [title(item),editorValue(item,"model"),item.id].join(" ").toLowerCase().includes(query));
 }
 function render() {
   const visible = filtered();
@@ -179,10 +188,10 @@ function openItem(item) {
   get("edit-title").textContent = title(item);
   get("editor-status").textContent = "";
   for (const key of fields) {
-    const input = form.elements[key], value = String(item.fields[key] ?? "");
+    const input = form.elements[key], value = editorValue(item,key);
     if (key === "condition" && value && !Array.from(input.options).some(option => option.value === value)) input.add(new Option(value,value));
-    input.value = key === "condition" && !Object.hasOwn(item.fields,key) ? "New" : value;
-    input.dataset.initial = input.value;
+    input.value = value;
+    input.dataset.initial = String(item.fields[key] ?? "");
   }
   get("diagnostics").textContent = statusLabel[item.status] + " · Revision " + item.revision;
   renderCatalogEvidence(item);
@@ -265,7 +274,7 @@ function next(id) {
   if (index >= 0 && list[index + 1]) openItem(list[index + 1]); else get("editor").close();
 }
 async function save(advance) {
-  if (saving) return;
+  if (saving) return false;
   const item = current, changes = patch();
   saving = true;
   const controls = Array.from(form.elements), disabled = controls.map(input => input.disabled);
@@ -276,7 +285,8 @@ async function save(advance) {
       Object.assign(item,{fields:updated.fields,revision:updated.revision,status:updated.status || (item.status==="approved"?"review":item.status)});
     }
     render(); if (advance) next(item.id); else {openItem(item); get("editor-status").textContent = "Saved.";}
-  } catch(error) {get("editor-status").textContent = error.message;}
+    return true;
+  } catch(error) {get("editor-status").textContent = error.message; return false;}
   finally { controls.forEach((input,index) => {input.disabled=disabled[index];}); saving = false; }
 }
 form.onsubmit = event => {event.preventDefault(); save(false);};
@@ -328,7 +338,7 @@ get("upload-form").onsubmit = async event => {
 let reviewedExport = null, previewGeneration = 0;
 const previewObjects = [];
 get("review-export").onclick = async () => {
-  if (Object.keys(patch()).length) {get("editor-status").textContent="Save your changes before reviewing the draft."; return;}
+  if (Object.keys(patch()).length && !await save(false)) return;
   const generation=++previewGeneration;
   get("confirm-export").disabled=true; reviewedExport=null;
   get("export-fields").textContent=get("export-description").textContent="";
