@@ -38,7 +38,7 @@ const photoObserver = new IntersectionObserver(entries => {
     entry.target.loadPhoto();
   }
 }, {rootMargin:"240px"});
-function photoImage(item, photo, alt, status) {
+function photoImage(item, photo, alt, status, eager = false) {
   const image = document.createElement("img");
   image.alt = alt; image.decoding = "async"; image.referrerPolicy = "no-referrer";
   image.loadPhoto = () => {
@@ -61,7 +61,7 @@ function photoImage(item, photo, alt, status) {
     }});
     drainPhotos();
   };
-  photoObserver.observe(image);
+  if (eager) queueMicrotask(image.loadPhoto); else photoObserver.observe(image);
   return image;
 }
 
@@ -109,6 +109,7 @@ function render() {
     const name = document.createElement("strong"), summary = document.createElement("small");
     name.textContent = title(item);
     summary.textContent = [statusLabel[item.status], item.fields.price && "$" + item.fields.price, photos.length + " photos"].filter(Boolean).join(" · ");
+    card.setAttribute("aria-label", title(item) + " " + summary.textContent);
     body.append(name,summary); card.append(media,body);
     card.onclick = () => openItem(item);
     return card;
@@ -262,7 +263,7 @@ function openItem(item) {
     button.type = "button"; button.className = "thumb";
     const label = document.createElement("span");
     label.textContent = (photo.kind === "manufacturer" ? "Reference " : "Photo ") + (index + 1);
-    button.append(photoImage(item, photo, ""), label);
+    button.append(photoImage(item, photo, "", null, true), label);
     button.setAttribute("aria-label", label.textContent);
     button.classList.toggle("selected", index === 0);
     button.onclick = () => {
