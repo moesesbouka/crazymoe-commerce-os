@@ -31,3 +31,11 @@ test('rejects non-JPEG renderer responses and oversized output',async()=>{
   const f=fixture();f.io.render=async()=>bytes;await assert.rejects(runRender(f.job,f.context,f.io),/JPEG/);assert.equal(f.stored.size,0);
  }
 });
+test('bounds transport concurrency and preserves order despite out-of-order completions',async()=>{
+ const f=fixture();f.job.snapshot.selection=Array.from({length:10},(_,i)=>({sha:String(i),kind:'real'}));
+ f.context.photos=f.job.snapshot.selection.map((s,i)=>({sha256:s.sha,bytes:i+1,bucket:'studio-originals',object_path:s.sha}));
+ let active=0,peak=0;
+ f.io.render=async body=>{active++;peak=Math.max(peak,active);await new Promise(r=>setTimeout(r,11-body.bytes));active--;return new Uint8Array([255,216,body.bytes,255,217]);};
+ const result=await runRender(f.job,f.context,f.io);
+ assert.equal(peak,4);assert.deepEqual(result.map(r=>r.source_sha),Array.from({length:10},(_,i)=>String(i)));
+});

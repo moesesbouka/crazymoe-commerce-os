@@ -6,64 +6,7 @@ const form = get("edit-form");
 const fields = ["title", "price", "condition", "model", "description", "source_url", "notes"];
 const auth = studioAuth.auth;
 let session, current, saving = false, items = [], view = "all", photoRequest = 0;
-const statusLabel = {review:"Review", approved:"Ready", listed:"Listed", archived:"Archived"};
-
-// Signed photo links stay in memory only. Limit work while scrolling or searching.
-const photoLinks = new Map(), photoQueue = [];
-let activePhotos = 0;
-function photoPath(item, photo) {
-  return "/functions/v1/studio-api/" + (photo.kind === "real"
-    ? "photo/" + encodeURIComponent(photo.sha)
-    : "reference/" + encodeURIComponent(item.id) + "/" + encodeURIComponent(photo.id));
-}
-async function photoLink(item, photo, renew = false) {
-  const key = photoPath(item, photo), cached = photoLinks.get(key);
-  if (!renew && cached && cached.until > Date.now()) return cached.value;
-  const value = request(key).then(result => result.url);
-  photoLinks.set(key, {value, until:Date.now() + 60000});
-  if (photoLinks.size > 160) photoLinks.delete(photoLinks.keys().next().value);
-  try { return await value; } catch(error) { photoLinks.delete(key); throw error; }
-}
-function drainPhotos() {
-  while (activePhotos < 4 && photoQueue.length) {
-    const job = photoQueue.shift();
-    if (!job.image.isConnected) continue;
-    activePhotos++;
-    job.run().finally(() => { activePhotos--; drainPhotos(); });
-  }
-}
-const photoObserver = new IntersectionObserver(entries => {
-  for (const entry of entries) if (entry.isIntersecting) {
-    photoObserver.unobserve(entry.target);
-    entry.target.loadPhoto();
-  }
-}, {rootMargin:"240px"});
-function photoImage(item, photo, alt, status, eager = false) {
-  const image = document.createElement("img");
-  image.alt = alt; image.decoding = "async"; image.referrerPolicy = "no-referrer";
-  image.loadPhoto = () => {
-    photoQueue.push({image, run:async () => {
-      for (let attempt = 0; attempt < 2; attempt++) {
-        try {
-          const url = await photoLink(item, photo, attempt > 0);
-          if (!image.isConnected) return;
-          image.src = url;
-          await image.decode();
-          if (status) status.hidden = true;
-          return;
-        } catch(error) {
-          if (attempt === 1 && image.isConnected) {
-            image.removeAttribute("src");
-            if (status) {status.hidden=false; status.textContent="Photo unavailable · refresh to retry";}
-          }
-        }
-      }
-    }});
-    drainPhotos();
-  };
-  if (eager) queueMicrotask(image.loadPhoto); else photoObserver.observe(image);
-  return image;
-}
+const statusLabel = {review:"Review", approved:"Approved", listed:"Listed", archived:"Archived"};
 
 async function request(url, options = {}) {
   const { data, error } = await auth.getSession();
@@ -86,31 +29,20 @@ async function request(url, options = {}) {
 }
 const rpc = (name, args = {}) => request("/rest/v1/rpc/" + name, {method:"POST", body:JSON.stringify(args)});
 const title = item => item.fields.title || item.generated_candidate?.title || item.id;
-const matchesView = (item, key) => key === "all" ? item.status !== "archived" : item.status === (key === "ready" ? "approved" : key);
+const matchesView = (item, key) => key === "all" || item.status === (key === "ready" ? "approved" : key);
 function filtered() {
   const query = get("search").value.trim().toLowerCase();
   return items.filter(item => matchesView(item, view) && [title(item),item.fields.model,item.id].join(" ").toLowerCase().includes(query));
 }
 function render() {
-  photoObserver.disconnect();
-  photoQueue.splice(0);
   const visible = filtered();
   get("cards").replaceChildren(...visible.map(item => {
     const card = document.createElement("button");
-    card.className = "card inventory-card";
-    card.type = "button";
-    const media = document.createElement("span"), body = document.createElement("span");
-    media.className = "image"; body.className = "body";
-    const photoStatus = document.createElement("span"); photoStatus.className = "photo-placeholder";
-    const photos = (item.photo_selection || []).filter(p => (p.kind === "real" && p.sha) || (p.kind === "manufacturer" && p.id));
-    photoStatus.textContent = photos.length ? "Loading photo…" : "No selected photo";
-    media.append(photoStatus);
-    if (photos.length) media.append(photoImage(item, photos[0], "", photoStatus));
+    card.className = "inventory-card";
     const name = document.createElement("strong"), summary = document.createElement("small");
     name.textContent = title(item);
-    summary.textContent = [statusLabel[item.status], item.fields.price && "$" + item.fields.price, photos.length + " photos"].filter(Boolean).join(" · ");
-    card.setAttribute("aria-label", title(item) + " " + summary.textContent);
-    body.append(name,summary); card.append(media,body);
+    summary.textContent = [statusLabel[item.status], item.fields.price && "$" + item.fields.price, item.id].filter(Boolean).join(" · ");
+    card.append(name,summary);
     card.onclick = () => openItem(item);
     return card;
   }));
@@ -121,7 +53,7 @@ function render() {
     get("count-" + key).textContent = items.filter(item => matchesView(item,key)).length;
   });
 }
-async function refresh() { items = await rpc("studio_state"); render(); }
+async function refresh() { items = (await rpc("studio_state")).filter(item => item.lifecycle !== "archived"); render(); }
 function notice(message) { get("message").hidden = !message; get("message").textContent = message; }
 async function openWorkspace(authSession) {
   session = authSession;
@@ -170,8 +102,6 @@ get("logout").onclick = async () => {
 auth.onAuthStateChange((event, authSession) => {
   session = authSession;
   if (event === "SIGNED_OUT") {
-    photoLinks.clear(); photoQueue.splice(0); photoObserver.disconnect();
-    get("cards").replaceChildren(); get("thumbs").replaceChildren(); get("hero").removeAttribute("src");
     document.querySelectorAll("dialog[open]").forEach(dialog => dialog.close());
     document.querySelector("aside").hidden = document.querySelector("main").hidden = true;
     get("login").hidden = false;
@@ -212,15 +142,11 @@ document.querySelectorAll("[data-view]").forEach(button => button.onclick = () =
 });
 async function preview(photo) {
   const sequence = ++photoRequest;
-  const item = current;
   get("hero").removeAttribute("src");
   get("photo-status").textContent = "Loading photo…";
   try {
-    const url = await photoLink(item, photo);
-    if (sequence !== photoRequest) return;
-    get("hero").src = url;
-    await get("hero").decode();
-    if (sequence === photoRequest) get("photo-status").textContent = "";
+    const result = await request("/functions/v1/studio-api/" + (photo.kind === "real" ? "photo/"+encodeURIComponent(photo.sha) : "reference/"+encodeURIComponent(current.id)+"/"+encodeURIComponent(photo.id)));
+    if (sequence === photoRequest) { get("hero").src = result.url; get("photo-status").textContent = ""; }
   } catch(error) { if (sequence === photoRequest) get("photo-status").textContent = error.message; }
 }
 function openItem(item) {
@@ -260,16 +186,7 @@ function openItem(item) {
   get("photo-status").textContent = photos.length ? "" : "No selected original photos.";
   get("thumbs").replaceChildren(...photos.map((photo,index) => {
     const button = document.createElement("button");
-    button.type = "button"; button.className = "thumb";
-    const label = document.createElement("span");
-    label.textContent = (photo.kind === "manufacturer" ? "Reference " : "Photo ") + (index + 1);
-    button.append(photoImage(item, photo, "", null, true), label);
-    button.setAttribute("aria-label", label.textContent);
-    button.classList.toggle("selected", index === 0);
-    button.onclick = () => {
-      get("thumbs").querySelectorAll("button").forEach(b => b.classList.toggle("selected", b === button));
-      preview(photo);
-    };
+    button.type = "button"; button.textContent = (photo.kind === "manufacturer" ? "Reference " : "Photo ") + (index + 1); button.onclick = () => preview(photo);
     return button;
   }));
   if (photos.length) preview(photos[0]);
@@ -471,4 +388,3 @@ get("transfer-export").onclick=async ()=>{
     finally{writing=false;previousButton.disabled=false;if(dialog.open)draw();}
   };
 }
-

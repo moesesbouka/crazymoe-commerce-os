@@ -47,7 +47,15 @@ context from Vault. It signs each private source, preserves selection order and 
 options, uploads content-addressed output without replacing existing objects, then
 downloads and hashes the stored JPEG before registration. The Python transport verifies
 full JPEG decoding and geometry; the Edge worker verifies stored byte identity. Its
-110-second processing budget leaves time for recording failure and retry state. This
-does not establish worst-case throughput for ten large images. Four orchestration tests
-cover ordering, retries, malformed output and storage corruption. No automatic schedule
-or intake integration is enabled by this source checkpoint.
+110-second processing budget leaves time for recording failure and retry state. At most
+four photo transports run concurrently; receipts retain source order even when requests
+finish in a different order. Five orchestration tests cover ordering, ten-source bounded
+concurrency, retries, malformed output and storage corruption.
+
+Live cloud acceptance of this component processed two, then four verified inventory
+originals on separate test records. Both jobs succeeded on their first attempt, stored
+and re-downloaded every JPEG, and preserved seller fields and historical export sets.
+Test records are archived and excluded from the active Studio list. The cron dispatcher
+runs only when eligible render jobs exist. Intake enqueue and owner-facing render controls
+remain unfinished; no full workflow acceptance is claimed. Ten large real photos still
+need a throughput acceptance run before claiming that batch size is supported in practice.
