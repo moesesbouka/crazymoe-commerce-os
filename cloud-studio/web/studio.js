@@ -4,10 +4,15 @@ const publicKey = "sb_publishable_xfIVDlnktUiJYm5U_1jEtw_Res600Af";
 const get = id => document.getElementById(id);
 const form = get("edit-form");
 const fields = ["title", "price", "condition", "model", "description", "source_url", "notes"];
+const auth = studioAuth.auth;
 let session, current, saving = false, items = [], view = "all", photoRequest = 0;
 const statusLabel = {review:"Review", approved:"Approved", listed:"Listed", archived:"Archived"};
 
 async function request(url, options = {}) {
+  const { data, error } = await auth.getSession();
+  if (error) throw error;
+  session = data.session;
+  if (!session) throw Error("Please sign in to continue.");
   const response = await fetch(backend + url, {
     ...options, cache:"no-store",
     headers:{apikey:publicKey, "Content-Type":"application/json",
@@ -58,40 +63,76 @@ async function openWorkspace(authSession) {
 }
 get("email-signin").onsubmit = async event => {
   event.preventDefault();
-  const input = event.currentTarget.elements.link;
-  const button = event.currentTarget.querySelector("button");
+  const login = event.currentTarget;
+  const button = login.querySelector("button");
   button.disabled = true;
+  get("login-status").textContent = "Sending your sign-in link…";
   try {
-    const url = new URL(input.value.trim());
-    input.value = "";
-    const token = url.searchParams.get("token");
-    if (url.origin !== backend || url.pathname !== "/auth/v1/verify" ||
-        url.searchParams.get("type") !== "magiclink" || !token) {
-      throw Error("Copy the Log In link from your Studio sign-in email.");
-    }
-    await openWorkspace(await request("/auth/v1/verify", {
-      method:"POST", body:JSON.stringify({token_hash:token, type:"magiclink"})
-    }));
+    const {error} = await auth.signInWithOtp({
+      email:login.elements.email.value.trim(),
+      options:{shouldCreateUser:false, emailRedirectTo:location.origin + "/app/"}
+    });
+    if (error) throw error;
+    get("login-status").textContent = "Check your email and click the newest sign-in link to open Studio.";
   } catch(error) {
-    session = null;
     get("login-status").textContent = error.message;
   } finally {
-    input.value = "";
     button.disabled = false;
   }
 };
 get("signin").onsubmit = async event => {
   event.preventDefault();
   const login = event.currentTarget;
-  login.querySelector("button").disabled = true;
+  const button = login.querySelector("button");
+  button.disabled = true;
   try {
-    const result = await request("/auth/v1/token?grant_type=password", {method:"POST",body:JSON.stringify(Object.fromEntries(new FormData(login)))});
+    const {data, error} = await auth.signInWithPassword(Object.fromEntries(new FormData(login)));
     login.elements.password.value = "";
-    await openWorkspace(result);
-  } catch(error) { session = null; get("login-status").textContent = error.message; }
-  finally { login.querySelector("button").disabled = false; }
+    if (error) throw error;
+    await openWorkspace(data.session);
+  } catch(error) { get("login-status").textContent = error.message; }
+  finally { button.disabled = false; }
 };
-get("logout").onclick = async () => { try {await request("/auth/v1/logout?scope=local",{method:"POST"});} finally {location.reload();} };
+get("logout").onclick = async () => {
+  if (get("editor").open && !canLeave()) return;
+  const {error} = await auth.signOut({scope:"local"});
+  if (error) {notice(error.message); return;}
+  location.replace("/app/");
+};
+auth.onAuthStateChange((event, authSession) => {
+  session = authSession;
+  if (event === "SIGNED_OUT") {
+    document.querySelectorAll("dialog[open]").forEach(dialog => dialog.close());
+    document.querySelector("aside").hidden = document.querySelector("main").hidden = true;
+    get("login").hidden = false;
+    get("login-status").textContent = "Sign in to continue.";
+  }
+  if (event === "SIGNED_IN" && get("login").hidden === false) {
+    // Leave the auth callback before reading a session, since the SDK holds its lock here.
+    setTimeout(() => openWorkspace(authSession).catch(error => {
+      get("login-status").textContent = error.message;
+    }), 0);
+  }
+});
+async function restoreSignIn() {
+  try {
+    const initialization = await auth.initialize();
+    if (initialization.error) throw initialization.error;
+    const {data, error} = await auth.getSession();
+    if (error) throw error;
+    if (data.session) await openWorkspace(data.session);
+    else get("login-status").textContent = "";
+  } catch(error) {
+    get("login-status").textContent = "Unable to open Studio. " + error.message;
+  } finally {
+    // Authentication links can carry a session or an expiry error in the fragment.
+    // Remove it from browser history after the SDK finishes processing it.
+    if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+    get("email-signin").querySelector("button").disabled = false;
+    get("signin").querySelector("button").disabled = false;
+  }
+}
+restoreSignIn();
 get("refresh").onclick = () => refresh().then(() => notice("Inventory refreshed.")).catch(error => notice(error.message));
 get("search").oninput = render;
 document.querySelectorAll("[data-view]").forEach(button => button.onclick = () => {
@@ -199,6 +240,10 @@ get("upload-form").onsubmit = async event => {
       const digest = await crypto.subtle.digest("SHA-256",await file.arrayBuffer());
       const sha = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2,"0")).join("");
       const path = "/storage/v1/object/studio-originals/incoming/" + session.user.id + "/" + uploadBatch + "/" + sha;
+      const {data:authData,error:authError}=await auth.getSession();
+      if(authError)throw authError;
+      session=authData.session;
+      if(!session)throw Error("Please sign in to upload photos.");
       const response = await fetch(backend+path,{method:"POST",headers:{apikey:publicKey,Authorization:"Bearer "+session.access_token,"Content-Type":file.type,"x-upsert":"false"},body:file});
       if (!response.ok) {
         const error = await response.json();
