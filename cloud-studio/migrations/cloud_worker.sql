@@ -185,21 +185,48 @@ create trigger studio_intake_render_revision after update of revision on studio_
 
 create function public.studio_render_status(p_item text) returns jsonb
 language plpgsql stable security definer set search_path='' as $$
-declare a studio_core.listing_authoring; s studio_core.photo_selection; job_state text; result text;
+declare a studio_core.listing_authoring; s studio_core.photo_selection; job_state text; job_id uuid; result text;
 begin
  if not studio_core.is_member() then raise exception 'Studio access denied' using errcode='42501';end if;
  select * into strict a from studio_core.listing_authoring where inventory_id=p_item;
  select * into strict s from studio_core.photo_selection where inventory_id=p_item;
  if s.exports_verified and exists(select 1 from studio_core.export_sets where inventory_id=p_item and selection=s.selection) then result:='ready';
  else
- select state into job_state from studio_core.jobs where inventory_id=p_item and kind='render'
+ select state,id into job_state,job_id from studio_core.jobs where inventory_id=p_item and kind='render'
  and payload->>'listing_revision'=a.revision::text and payload->>'photo_revision'=s.revision::text
  order by created_at desc limit 1;
  result:=case when job_state in ('queued','running') then job_state when job_state='failed' then 'failed'
  when jsonb_array_length(s.selection)=0 then 'needs_photos'
  when jsonb_array_length(s.selection)>10 then 'selection_limit' else 'not_prepared' end;
  end if;
- return jsonb_build_object('state',result,'revision',a.revision,'photo_revision',s.revision);
+ return jsonb_build_object('state',result,'revision',a.revision,'photo_revision',s.revision,
+ 'retry_job',case when result='failed' and a.status='review' then job_id else null end);
 end $$;
 revoke all on function public.studio_render_status(text) from public,anon,authenticated,service_role;
 grant execute on function public.studio_render_status(text) to authenticated;
+
+create function public.studio_retry_render(p_item text,p_revision bigint,p_photo_revision bigint,p_failed_job uuid) returns uuid
+language plpgsql security definer set search_path='' as $$
+declare a studio_core.listing_authoring; s studio_core.photo_selection; j studio_core.jobs; next_id uuid;
+begin
+ if not studio_core.is_member() then raise exception 'Studio access denied' using errcode='42501';end if;
+ select * into strict a from studio_core.listing_authoring where inventory_id=p_item for update;
+ select * into strict s from studio_core.photo_selection where inventory_id=p_item for update;
+ if a.revision<>p_revision or s.revision<>p_photo_revision then raise exception 'Selection changed' using errcode='40001';end if;
+ if a.status<>'review' or s.exports_verified or exists(select 1 from studio_core.export_sets where inventory_id=p_item)
+ or not exists(select 1 from studio_core.inventory where id=p_item and lifecycle='current') then raise exception 'Render no longer needed';end if;
+ select * into strict j from studio_core.jobs where id=p_failed_job and inventory_id=p_item and kind='render' for update;
+ if j.state<>'failed' or j.payload->>'listing_revision'<>a.revision::text or j.payload->>'photo_revision'<>s.revision::text
+ or j.payload->'selection' is distinct from s.selection then raise exception 'Retry snapshot changed' using errcode='40001';end if;
+ select id into next_id from studio_core.jobs where inventory_id=p_item and kind='render' and state in ('queued','running')
+ and payload->>'listing_revision'=a.revision::text and payload->>'photo_revision'=s.revision::text order by created_at desc limit 1;
+ if next_id is not null then return next_id;end if;
+ -- Fresh identity fences late attempts from the failed worker. Never reset its attempts/history.
+ insert into studio_core.jobs(inventory_id,kind,idempotency_key,payload,created_at)
+ values(p_item,'render',j.id::text||':retry',j.payload||jsonb_build_object('retry_of',j.id,'requested_by',auth.uid()),clock_timestamp())
+ on conflict(idempotency_key) do nothing returning id into next_id;
+ if next_id is null then select id into strict next_id from studio_core.jobs where idempotency_key=j.id::text||':retry';end if;
+ return next_id;
+end $$;
+revoke all on function public.studio_retry_render(text,bigint,bigint,uuid) from public,anon,authenticated,service_role;
+grant execute on function public.studio_retry_render(text,bigint,bigint,uuid) to authenticated;

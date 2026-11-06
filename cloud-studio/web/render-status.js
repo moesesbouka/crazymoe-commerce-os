@@ -12,7 +12,7 @@ globalThis.studioRenderStatus = {
         const value=await read();
         if(stopped||!active())return;
         if(value.revision!==revision){show("This product changed. Refresh before reviewing its draft.",false);return;}
-        show(messages[value.state]||"Photo status unavailable.",value.state==='ready');
+        show(messages[value.state]||"Photo status unavailable.",value.state==='ready',value);
         if(['queued','running'].includes(value.state))timer=schedule(tick,5000);
       }catch(error){
         if(stopped||!active())return;

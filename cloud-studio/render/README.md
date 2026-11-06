@@ -75,3 +75,11 @@ The pause script disables both automatic triggers and the render cron job. Resum
 enabling `studio_intake_render` on `studio_core.photo_selection` and
 `studio_intake_render_revision` on `studio_core.listing_authoring`, restoring the request
 grant, and reapplying the render schedule. No saved inventory or jobs are deleted.
+
+Manual retries use `studio_retry_render` with both current revisions and the failed job ID.
+A retry creates a new job identity and keeps the failed job's attempt count and error intact;
+duplicate clicks return the same child job. Late attempts from the original job cannot
+register output for the retry. Existing exports, approved/archived products and changed
+snapshots are rejected. Studio requires saving pending edits before retrying and resumes
+progress polling without reopening or resetting the editor. Pausing render requests must
+also revoke the retry grant, as the pause script now does.

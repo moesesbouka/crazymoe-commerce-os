@@ -193,12 +193,28 @@ function openItem(item) {
   }));
   if (photos.length) preview(photos[0]);
   if (!get("editor").open) get("editor").showModal();
+  monitorRender(item);
+}
+function monitorRender(item) {
+  stopRenderStatus();
+  get("retry-render").hidden = true;
   get("review-export").disabled = true;
   get("render-status").textContent = "Checking listing photos…";
   stopRenderStatus = studioRenderStatus.watch({
     read:()=>rpc("studio_render_status",{p_item:item.id}), revision:item.revision,
     active:()=>get("editor").open && current===item,
-    show:(message,ready)=>{get("render-status").textContent=message;get("review-export").disabled=!ready;}
+    show:(message,ready,value)=>{
+      get("render-status").textContent=message;get("review-export").disabled=!ready;
+      const button=get("retry-render");button.hidden=!value?.retry_job;button.disabled=false;
+      button.onclick=async()=>{
+        if(Object.keys(patch()).length){get("editor-status").textContent="Save your changes before retrying photo preparation.";return;}
+        button.disabled=true;
+        try{
+          await rpc("studio_retry_render",{p_item:item.id,p_revision:value.revision,p_photo_revision:value.photo_revision,p_failed_job:value.retry_job});
+          if(current===item && get("editor").open)monitorRender(item);
+        }catch(error){if(current===item){get("editor-status").textContent=error.message;button.disabled=false;}}
+      };
+    }
   });
 }
 function patch() {
