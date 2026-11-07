@@ -1,4 +1,5 @@
-"""Browser regression: incomplete migrated fields, seller overrides and save-before-preview."""
+"""Browser regression: prefills, seller overrides and save-before-one-click approval."""
+import hashlib
 import os
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -11,6 +12,8 @@ with sync_playwright() as p:
         for width in (390, 1280):
             for fail_save in (False, True):
                 calls = []
+                photo = b'\xff\xd8\xff\xd9'
+                photo_sha = hashlib.sha256(photo).hexdigest()
                 item = dict(id='fixture', lifecycle='current', fields={'price': '60'}, revision=1, status='review',
                             photo_selection=[], generated_candidate={'title': 'Prepared trundle', 'model': 'BT40TBSL', 'price': '100', 'description': 'Prepared description'},
                             identity_revision=1, catalog_evidence=[])
@@ -37,7 +40,17 @@ with sync_playwright() as p:
                             r.fulfill(json=item)
                     elif u.path.endswith('/export-preview'):
                         calls.append('preview'); assert r.request.post_data_json['revision'] == 2
-                        r.fulfill(json={'snapshot': dict(item['fields'], id='fixture', revision=2, images=[]), 'urls': []})
+                        r.fulfill(json={'snapshot': dict(item['fields'], id='fixture', revision=2,
+                                                        images=[{'sha': photo_sha, 'bytes': len(photo)}]),
+                                        'urls': ['https://storage.fixture/photo.jpg']})
+                    elif u.netloc == 'storage.fixture':
+                        calls.append('photo'); r.fulfill(body=photo, content_type='image/jpeg')
+                    elif u.path.endswith('/studio_approve_export'):
+                        calls.append('approve')
+                        body = r.request.post_data_json
+                        assert body['p_item'] == 'fixture' and body['p_revision'] == 2
+                        assert body['p_snapshot']['images'][0]['sha'] == photo_sha
+                        item['status'] = 'approved'; r.fulfill(json=True)
                     else: r.abort()
                 context = browser.new_context(viewport={'width': width, 'height': 850})
                 context.route('**/*', route)
@@ -54,13 +67,14 @@ with sync_playwright() as p:
                     assert calls == ['save']
                     assert page.locator('[name=title]').input_value() == 'Seller edited title'
                 else:
-                    page.get_by_text('Review the listing text and photo order before approving.', exact=True).wait_for()
-                    assert calls == ['save', 'preview']
-                    page.locator('#close-export').click(); page.locator('#close').click(); page.locator('.inventory-card').click()
+                    page.get_by_text('Approved — ready for Facebook handoff.', exact=True).wait_for()
+                    assert calls == ['save', 'preview', 'photo', 'approve']
+                    assert page.locator('#export-dialog').count() == 0
+                    page.locator('#close').click(); page.locator('.inventory-card').click()
                     assert page.locator('[name=title]').input_value() == 'Seller edited title'
                     # Deliberately saved blank values must never be replaced by suggestions.
                     assert page.evaluate("editorValue({fields:{title:''},generated_candidate:{title:'old'}},'title')") == ''
                 context.close()
-        print('PASS: mobile/desktop suggested fields persist before preview; seller overrides, blank values, price and failed-save edits preserved')
+        print('PASS: mobile/desktop prefills persist before one-click approval; no redundant modal; seller overrides, blanks, price and failed-save edits preserved')
     finally:
         browser.close()
