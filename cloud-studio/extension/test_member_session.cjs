@@ -8,6 +8,7 @@ const sessionStore={};
 const requests=[];
 const chrome={
   runtime:{
+    id:"extension-id",getURL:path=>"chrome-extension://extension-id/"+path,
     onMessageExternal:{addListener(fn){external=fn;}},
     onMessage:{addListener(fn){internal=fn;}}
   },
@@ -44,6 +45,9 @@ function connect(message,origin="https://crazymoe-marketplace-studio.vercel.app"
   await vm.runInContext("studioMemberFetch('/rest/v1/active_listings?limit=1')",context);
   assert.equal(requests.at(-1).options.headers.Authorization,"Bearer old.token.value");
   assert.equal(external({type:"STUDIO_AUTH_SESSION",session:fresh},{origin:"https://evil.invalid"},()=>{}),false);
+  const probe=await new Promise(resolve=>assert.equal(internal({type:"STUDIO_MEMBER_PROBE"},
+    {id:"extension-id",url:"chrome-extension://extension-id/member_probe.html"},resolve),true));
+  assert.equal(probe.ok,true);
 
   sessionStore.studioAuthSession.expires_at=Math.floor(Date.now()/1000)-1;
   await vm.runInContext("studioMemberFetch('/rest/v1/action_queue?limit=1')",context);
