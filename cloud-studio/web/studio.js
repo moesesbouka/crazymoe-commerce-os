@@ -44,6 +44,65 @@ function filtered() {
   const query = get("search").value.trim().toLowerCase();
   return items.filter(item => matchesView(item, view) && [title(item),editorValue(item,"model"),item.id].join(" ").toLowerCase().includes(query));
 }
+// Cards show a seller-selected warehouse cover where possible, but never private
+// label/barcode reference images. URLs are short-lived and fetched only when visible.
+const coverCache = new Map();
+const coverJobs = [];
+let coverActive = 0;
+const coverObserver = "IntersectionObserver" in window ? new IntersectionObserver(entries => {
+  for (const entry of entries) if (entry.isIntersecting) {
+    coverObserver.unobserve(entry.target);
+    entry.target._loadCover?.();
+  }
+}, {rootMargin:"220px"}) : null;
+function drainCoverQueue() {
+  while (coverActive < 4 && coverJobs.length) {
+    const job = coverJobs.shift();
+    if (!job.card.isConnected) continue;
+    coverActive++;
+    job.load().finally(() => {coverActive--; drainCoverQueue();});
+  }
+}
+function productCover(item, card) {
+  const frame = document.createElement("div");
+  frame.className = "product-cover";
+  const label = document.createElement("span");
+  label.className = "product-cover-placeholder";
+  label.textContent = "Loading photo…";
+  frame.append(label);
+  const selection = Array.isArray(item.photo_selection) ? item.photo_selection : [];
+  const photo = selection.find(p => p.kind === "real" && p.sha)
+    || selection.find(p => p.kind === "manufacturer" && p.id);
+  if (!photo) {
+    label.textContent = "Product photo needed";
+    return frame;
+  }
+  const key = photo.kind === "real" ? "photo/" + encodeURIComponent(photo.sha)
+    : "reference/" + encodeURIComponent(item.id) + "/" + encodeURIComponent(photo.id);
+  const image = document.createElement("img");
+  image.alt = "Product photo for " + title(item);
+  image.loading = "lazy";
+  image.decoding = "async";
+  image.referrerPolicy = "no-referrer";
+  const load = async () => {
+    try {
+      const cached = coverCache.get(key);
+      const url = cached && Date.now() - cached.time < 180000 ? cached.url
+        : (await request("/functions/v1/studio-api/" + key)).url;
+      if (!cached || url !== cached.url) coverCache.set(key,{url,time:Date.now()});
+      if (!card.isConnected) return;
+      image.onload = () => {label.remove();};
+      image.onerror = () => {image.remove();label.textContent = "Photo unavailable";coverCache.delete(key);};
+      frame.append(image);
+      image.src = url;
+    } catch(error) {
+      if (card.isConnected) label.textContent = "Photo unavailable";
+    }
+  };
+  card._loadCover = () => {coverJobs.push({card,load});drainCoverQueue();};
+  if (coverObserver) coverObserver.observe(card); else card._loadCover();
+  return frame;
+}
 function render() {
   const visible = filtered();
   get("cards").replaceChildren(...visible.map(item => {
@@ -52,7 +111,11 @@ function render() {
     const name = document.createElement("strong"), summary = document.createElement("small");
     name.textContent = title(item);
     summary.textContent = [statusLabel[item.status], item.fields.price && "$" + item.fields.price, item.id].filter(Boolean).join(" · ");
-    card.append(name,summary);
+    const body = document.createElement("div");
+    body.className = "product-card-body";
+    body.append(name,summary);
+    const cover = productCover(item,card);
+    card.append(cover,body);
     card.onclick = () => openItem(item);
     return card;
   }));
