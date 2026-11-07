@@ -29,6 +29,14 @@ async function request(url, options = {}) {
   return body;
 }
 const rpc = (name, args = {}) => request("/rest/v1/rpc/" + name, {method:"POST", body:JSON.stringify(args)});
+async function connectStudioExtension(){
+  const {data}=await auth.getSession(), active=data.session;
+  if(!active?.access_token||!active?.refresh_token||!active?.expires_at||!globalThis.chrome?.runtime?.sendMessage)return;
+  const message={type:"STUDIO_AUTH_SESSION",session:{access_token:active.access_token,
+    refresh_token:active.refresh_token,expires_at:active.expires_at}};
+  for(const id of ["jhkkefonggnemmdpaahpnkgcgfjibeal","kbdeepgfbofgljhijkdejmodfhfeeplh"])
+    await chrome.runtime.sendMessage(id,message).catch(()=>null);
+}
 // Missing migrated fields may use prepared suggestions; explicit seller values,
 // including empty strings, always win. Suggestions are persisted before review.
 function editorValue(item, key) {
@@ -131,6 +139,7 @@ function notice(message) { get("message").hidden = !message; get("message").text
 async function openWorkspace(authSession) {
   session = authSession;
   await refresh();
+  await connectStudioExtension();
   get("login").hidden = true;
   document.querySelector("aside").hidden = document.querySelector("main").hidden = false;
 }
@@ -504,7 +513,9 @@ get("transfer-export").onclick=async ()=>{
     const gallery=await chrome.runtime.sendMessage(galleryId,{type:"STUDIO_CHECK_HANDOFF"}).catch(()=>null);
     if(gallery?.ready)extensionId=galleryId;
     const token=await rpc("studio_issue_handoff",{p_item:current.id,p_revision:current.revision});
-    const answer=await chrome.runtime.sendMessage(extensionId,{type:"STUDIO_APPROVED_DRAFT",token});
+    const {data}=await auth.getSession(), active=data.session;
+    const extensionSession=active?{access_token:active.access_token,refresh_token:active.refresh_token,expires_at:active.expires_at}:null;
+    const answer=await chrome.runtime.sendMessage(extensionId,{type:"STUDIO_APPROVED_DRAFT",token,session:extensionSession});
     if(!answer?.ok)throw Error("Commerce OS could not open the draft.");
     get("editor-status").textContent="In the Facebook tab, choose Load next approved product.";
   }catch(error){get("editor-status").textContent=error.message;}
