@@ -54,6 +54,8 @@ def install(target, source):
         "gallery_bg.js": transform_gallery(original["gallery_bg.js"].decode("utf-8-sig")).encode(),
         "cloud_handoff.js": (source / "cloud_handoff.js").read_bytes(),
         "manifest.json": (json.dumps(manifest, indent=2) + "\n").encode(),
+        "member_probe.html": (source / "member_probe.html").read_bytes(),
+        "member_probe.js": (source / "member_probe.js").read_bytes(),
     }
     stage = backup / "staged"
     stage.mkdir()
@@ -67,7 +69,9 @@ def install(target, source):
     try:
         for name, data in changes.items():
             path = target / name
-            if path.read_bytes() != original[name]:
+            if path.exists() and name not in original:
+                raise RuntimeError("Unexpected acceptance helper already exists")
+            if name in original and path.read_bytes() != original[name]:
                 raise RuntimeError("Extension changed during installation")
             temp = path.with_suffix(path.suffix + ".68-1-20.tmp")
             with temp.open("xb") as stream:
@@ -80,7 +84,10 @@ def install(target, source):
         for name in reversed(written):
             path = target / name
             if path.read_bytes() == changes[name]:
-                path.write_bytes(original[name])
+                if name in original:
+                    path.write_bytes(original[name])
+                else:
+                    path.unlink()
         raise
     print("Verified on disk: 68.1.20", len(written), "files")
 
