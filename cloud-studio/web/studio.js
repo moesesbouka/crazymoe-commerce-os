@@ -222,6 +222,7 @@ async function preview(photo) {
     if (sequence === photoRequest) { get("hero").src = result.url; get("photo-status").textContent = ""; }
   } catch(error) { if (sequence === photoRequest) get("photo-status").textContent = error.message; }
 }
+let inlinePhotoLoader = () => {};
 let stopRenderStatus = () => {};
 function renderCatalogEvidence(item) {
   const list = get("catalog-evidence-list");
@@ -321,6 +322,7 @@ function openItem(item) {
   }));
   if (photos.length) preview(photos[0]);
   if (!get("editor").open) get("editor").showModal();
+  inlinePhotoLoader(item);
   monitorRender(item);
 }
 get("record-catalog-evidence").onclick=async()=>{
@@ -489,71 +491,175 @@ get("transfer-export").onclick=async ()=>{
   }catch(error){get("editor-status").textContent=error.message;}
 };
 
+
 {
-  const dialog = get("photo-editor"), list = get("photo-list"), message = get("selection-status");
-  const saveButton = get("save-photos"), previousButton = get("previous-photos");
-  let data, order, item, generation = 0, writing = false;
-  const thumbnails = new Map();
+  const list=get("photo-list"), referencesBox=get("reference-gallery");
+  const status=get("selection-status"),saveButton=get("save-photos");
+  const previousButton=get("previous-photos"),count=get("photo-count");
+  let data=null,order=[],refs=[],product=null,turn=0,savingPhotos=false,dragged=null;
+  const urls=new Map();
+  const photoPath=(source,id)=>source.kind==="manufacturer"
+    ?"reference/"+encodeURIComponent(id)+"/"+encodeURIComponent(source.id)
+    :"photo/"+encodeURIComponent(source.sha);
   function draw() {
-    list.replaceChildren();
-    const remaining = data.choices.map(c=>c.id).filter(id=>!order.includes(id));
-    for (const id of [...order,...remaining]) {
-      const choice = data.choices.find(c=>c.id===id), index = order.indexOf(id);
-      const row = document.createElement("li"), name = document.createElement("span");
-      const group = choice.source.kind==="manufacturer" ? "Manufacturer" : "Inventory";
-      name.textContent = group+" photo "+choice.position+" · "+(choice.source.style_mode || "original");
-      if (thumbnails.has(id)) {
-        const img=document.createElement("img"); img.src=thumbnails.get(id); img.alt=""; row.append(img);
+    list.replaceChildren();referencesBox.replaceChildren();
+    if(!data)return;
+    const chosen=order.map(id=>data.choices.find(c=>c.id===id)).filter(Boolean);
+    const rest=data.choices.filter(c=>!order.includes(c.id));
+    count.textContent=chosen.length+" selected · "+data.choices.length+" prepared";
+    const move=(id,offset)=>{
+      const from=order.indexOf(id),to=from+offset;
+      if(from<0||to<0||to>=order.length)return;
+      const candidate=[...order];candidate.splice(from,1);candidate.splice(to,0,id);
+      const firstFactory=candidate.findIndex(key=>data.choices.find(c=>c.id===key)?.source.kind==="manufacturer");
+      if(firstFactory>=0&&candidate.slice(firstFactory+1).some(key=>
+        data.choices.find(c=>c.id===key)?.source.kind==="real")) {
+        status.textContent="Warehouse photos must stay before factory references.";return;
       }
-      row.append(name);
-      const button = (label,disabled,action)=>{
-        const b=document.createElement("button"); b.type="button"; b.className="secondary"; b.textContent=label;
-        b.disabled=disabled || writing; b.onclick=()=>{action();draw();}; row.append(b);
-      };
-      if (index<0) button("Add",order.length>=10,()=>order.push(id));
-      else {
-        button("Earlier",index===0,()=>{order.splice(index,1);order.splice(index-1,0,id);});
-        button("Later",index===order.length-1,()=>{order.splice(index,1);order.splice(index+1,0,id);});
-        button("Remove",false,()=>order.splice(index,1));
-      }
-      list.append(row);
+      order=candidate;draw();
+    };
+    function action(parent,label,disabled,fn) {
+      const b=document.createElement("button");b.type="button";b.className="secondary photo-action";
+      b.textContent=label;b.disabled=disabled||savingPhotos;b.onclick=()=>{fn();draw();};
+      parent.append(b);
     }
-    saveButton.disabled=writing || !order.length || JSON.stringify(order)===JSON.stringify(data.selected);
+    for(const choice of [...chosen,...rest]) {
+      const idx=order.indexOf(choice.id),on=idx>=0;
+      const tile=document.createElement("li");
+      tile.className="photo-tile"+(on?" selected":"")+(idx===0?" cover":"");
+      const imageButton=document.createElement("button");imageButton.type="button";
+      imageButton.className="photo-preview";imageButton.title="Preview larger photo";
+      const img=document.createElement("img");img.alt="Product thumbnail";img.loading="lazy";
+      if(urls.get(choice.id))img.src=urls.get(choice.id);
+      imageButton.append(img);imageButton.onclick=()=>preview(choice.source);
+      const name=document.createElement("span");
+      name.className="photo-label";
+      name.textContent=(choice.source.kind==="manufacturer"?"Factory reference":"Warehouse photo")+
+        (idx===0?" · COVER":on?" · Selected":" · Available");
+      const controls=document.createElement("div");controls.className="photo-tile-controls";
+      tile.append(imageButton,name,controls);
+      if(!on) action(controls,"Add",order.length>=10,()=>{
+        if(choice.source.kind==="real"){
+          const firstFactory=order.findIndex(id=>data.choices.find(c=>c.id===id)?.source.kind==="manufacturer");
+          if(firstFactory>=0)order.splice(firstFactory,0,choice.id);else order.push(choice.id);
+        }else order.push(choice.id);
+      });
+      else {
+        if(choice.source.kind==="real"&&idx>0)
+          action(controls,"Make cover",false,()=>{order.splice(idx,1);order.unshift(choice.id);});
+        action(controls,"←",idx===0,()=>move(choice.id,-1));
+        action(controls,"→",idx===order.length-1,()=>move(choice.id,1));
+        action(controls,"Remove",false,()=>order.splice(idx,1));
+      }
+      tile.draggable=on&&!savingPhotos;
+      tile.ondragstart=ev=>{dragged=choice.id;ev.dataTransfer.effectAllowed="move";};
+      tile.ondragover=ev=>{if(dragged&&on)ev.preventDefault();};
+      tile.ondrop=ev=>{
+        ev.preventDefault();
+        if(!dragged||!on||dragged===choice.id)return;
+        const old=order.indexOf(dragged),dest=order.indexOf(choice.id);
+        if(old>=0&&dest>=0)move(dragged,dest-old);
+        dragged=null;
+      };
+      tile.ondragend=()=>{dragged=null;};
+      list.append(tile);
+    }
+    const already=new Set(data.choices.filter(c=>c.source.kind==="manufacturer").map(c=>c.source.id));
+    const hidden=refs.filter(r=>!already.has(r.id));
+    if(hidden.length) {
+      const heading=document.createElement("h4");
+      heading.textContent="Saved manufacturer / retailer photos";
+      const explanation=document.createElement("p");explanation.className="muted";
+      explanation.textContent="Preview available. These references are not yet prepared as verified Facebook export photos; they are not automatically added to the listing.";
+      const grid=document.createElement("div");grid.className="factory-reference-grid";
+      for(const ref of hidden) {
+        const tile=document.createElement("div");tile.className="photo-tile reference-only";
+        const btn=document.createElement("button");btn.type="button";btn.className="photo-preview";
+        btn.title="Preview factory/reference photograph";
+        const img=document.createElement("img");img.alt="Factory reference thumbnail";img.loading="lazy";
+        const key="reference/"+encodeURIComponent(product.id)+"/"+encodeURIComponent(ref.id);
+        if(urls.get(key))img.src=urls.get(key);
+        btn.append(img);btn.onclick=()=>preview({kind:"manufacturer",id:ref.id});
+        const label=document.createElement("small");
+        label.textContent=ref.label||"Factory/reference photo · preview only";
+        tile.append(btn,label);grid.append(tile);
+      }
+      referencesBox.append(heading,explanation,grid);
+    }
+    const isReal=chosen.length&&chosen[0].source.kind==="real";
+    saveButton.disabled=savingPhotos||!isReal||chosen.length>10||
+      JSON.stringify(order)===JSON.stringify(data.selected);
+    previousButton.hidden=!data.previous;
   }
-  get("edit-photos").onclick=async ()=>{
-    if(Object.keys(patch()).length){get("editor-status").textContent="Save your listing edits before changing photos.";return;}
-    item=current; const turn=++generation;
-    data=null; thumbnails.clear(); list.replaceChildren(); previousButton.hidden=true;
-    saveButton.disabled=true; message.textContent="Loading prepared photos…";dialog.showModal();
+  async function load(item) {
+    const serial=++turn;product=item;data=null;refs=[];order=[];urls.clear();
+    list.replaceChildren();referencesBox.replaceChildren();saveButton.disabled=true;
+    status.textContent="Loading all prepared photos and saved factory references…";
     try {
-      const result=await rpc("studio_photo_choices",{p_item:item.id});
-      if(turn!==generation)return;
-      if(result.listing_revision!==item.revision)throw Error("Listing changed. Refresh inventory before editing photos.");
-      data=result; order=[...data.selected];previousButton.hidden=!data.previous;
-      message.textContent=data.choices.length?"":"This product has no verified prepared photos yet.";
+      const response=await Promise.allSettled([
+        rpc("studio_photo_choices",{p_item:item.id}),
+        rpc("studio_reference_choices",{p_item:item.id})
+      ]);
+      if(serial!==turn||current!==item)return;
+      if(response[0].status!=="fulfilled")throw response[0].reason;
+      data=response[0].value;
+      if(data.listing_revision!==item.revision)throw Error("Listing changed; refresh before editing photos.");
+      order=(Array.isArray(data.selected)?data.selected:[]).filter(id=>data.choices.some(c=>c.id===id));
+      refs=response[1].status==="fulfilled"&&Array.isArray(response[1].value)?response[1].value:[];
+      status.textContent=data.choices.length?"":"No prepared photos available. Add at least one public-safe warehouse photo.";
+      if(response[1].status==="rejected")status.textContent+=" Manufacturer reference lookup unavailable.";
       draw();
-      await Promise.allSettled(data.choices.map(async choice=>{
-        const source=choice.source;
-        const path=source.kind==="manufacturer" ? "reference/"+encodeURIComponent(item.id)+"/"+encodeURIComponent(source.id) : "photo/"+encodeURIComponent(source.sha);
-        const result=await request("/functions/v1/studio-api/"+path);
-        if(turn===generation && !writing){thumbnails.set(choice.id,result.url);draw();}
+      const todo=[
+        ...data.choices.map(c=>({key:c.id,path:photoPath(c.source,item.id)})),
+        ...refs.filter(r=>!data.choices.some(c=>c.source.id===r.id))
+          .map(r=>({key:"reference/"+encodeURIComponent(item.id)+"/"+encodeURIComponent(r.id),
+            path:"reference/"+encodeURIComponent(item.id)+"/"+encodeURIComponent(r.id)}))
+      ];
+      let index=0;
+      await Promise.allSettled(Array.from({length:Math.min(4,todo.length)},async()=>{
+        while(index<todo.length) {
+          const t=todo[index++];
+          try {
+            const photo=await request("/functions/v1/studio-api/"+t.path);
+            if(serial===turn&&current===item){urls.set(t.key,photo.url);draw();}
+          }catch(error){/* Leave the photo unselected; never guess a URL. */}
+        }
       }));
-    } catch(error){if(turn===generation)message.textContent=error.message;}
+    }catch(error){if(serial===turn&&current===item)status.textContent=error.message;}
+  }
+  inlinePhotoLoader=load;
+  get("edit-photos").onclick=()=>{if(current)load(current);};
+  previousButton.onclick=()=>{
+    if(!data?.previous)return;
+    order=data.previous.filter(id=>data.choices.some(c=>c.id===id));
+    status.textContent="Previous order restored locally. Save photos to keep it.";draw();
   };
-  previousButton.onclick=()=>{if(data?.previous){order=[...data.previous];draw();}};
-  get("cancel-photos").onclick=()=>{if(!writing)dialog.close();};
-  dialog.oncancel=event=>{if(writing)event.preventDefault();};
-  dialog.onclose=()=>{generation++;thumbnails.clear();};
-  saveButton.onclick=async ()=>{
-    if(writing || !data)return;
-    writing=true;previousButton.disabled=true;draw();message.textContent="Saving photos…";
-    try {
-      await rpc("studio_save_photo_choices",{p_item:item.id,p_listing_revision:data.listing_revision,p_photo_revision:data.revision,p_choices:order});
-      saveButton.disabled=true;
-      dialog.close();
-      await refresh();openItem(items.find(i=>i.id===item.id));
-      get("editor-status").textContent="Photos saved. Review the updated Facebook draft before approval.";
-    } catch(error){if(dialog.open)message.textContent=error.message;else get("editor-status").textContent="Photos saved. Refresh inventory to load the updated selection.";}
-    finally{writing=false;previousButton.disabled=false;if(dialog.open)draw();}
+  get("cancel-photos").onclick=()=>{
+    if(!data||savingPhotos)return;
+    order=[...data.selected];status.textContent="Unsaved photo changes discarded.";draw();
+  };
+  saveButton.onclick=async()=>{
+    if(savingPhotos||!data)return;
+    if(Object.keys(patch()).length){
+      status.textContent="Save listing text changes before saving photo choices.";return;
+    }
+    if(!order.length||data.choices.find(c=>c.id===order[0])?.source.kind!=="real"){
+      status.textContent="Select an actual warehouse photograph as the cover.";return;
+    }
+    savingPhotos=true;draw();status.textContent="Saving photo choices…";
+    const savingItem=product;
+    try{
+      await rpc("studio_save_photo_choices",{
+        p_item:savingItem.id,p_listing_revision:data.listing_revision,
+        p_photo_revision:data.revision,p_choices:order
+      });
+      await refresh();
+      const updated=items.find(i=>i.id===savingItem.id);
+      if(updated){
+        openItem(updated);
+        get("editor-status").textContent="Photo choices saved; review the updated draft before approval.";
+      }else status.textContent="Saved. Refresh inventory to see the updated product.";
+    }catch(error){status.textContent=error.message;}
+    finally{savingPhotos=false;if(current===savingItem)draw();}
   };
 }
