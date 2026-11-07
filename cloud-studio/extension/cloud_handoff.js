@@ -53,6 +53,13 @@ chrome.runtime.onMessageExternal.addListener((message,sender,reply)=>{
 chrome.tabs.onRemoved.addListener(id=>{chrome.storage.session.remove("studioDraft"+id);});
 // Report only whether this tab is assigned to a Studio transfer. The token stays in the worker.
 chrome.runtime.onMessage.addListener((message,sender,reply)=>{
+  if(message?.type==="STUDIO_MEMBER_PROBE"){
+    if(sender.id!==chrome.runtime.id||!sender.url?.startsWith(chrome.runtime.getURL(""))){reply({ok:false});return false;}
+    studioMemberFetch("/rest/v1/active_listings?select=facebook_id&limit=1")
+      .then(async response=>reply({ok:response.ok,status:response.status,count:(await response.json()).length}))
+      .catch(error=>reply({ok:false,error:error.message}));
+    return true;
+  }
   if(message?.type!=="STUDIO_TRANSFER_MODE") return false;
   const url=new URL(sender.url || "about:blank");
   if(sender.frameId!==0 || !sender.tab?.id || !["https://www.facebook.com","https://m.facebook.com"].includes(url.origin)
