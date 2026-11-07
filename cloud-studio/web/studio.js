@@ -223,6 +223,7 @@ async function preview(photo) {
   } catch(error) { if (sequence === photoRequest) get("photo-status").textContent = error.message; }
 }
 let inlinePhotoLoader = () => {};
+let inlinePhotoPendingChanges = () => false;
 let stopRenderStatus = () => {};
 function renderCatalogEvidence(item) {
   const list = get("catalog-evidence-list");
@@ -437,48 +438,58 @@ get("upload-form").onsubmit = async event => {
   } catch(error) { message.textContent = error.message; }
   finally { button.disabled = picker.disabled = false; }
 };
-let reviewedExport = null, previewGeneration = 0;
-const previewObjects = [];
+// Single-click approval: verify exactly the saved draft and every selected JPEG,
+// then submit the existing revision-checked approval RPC. Never show a second dialog.
+let approvalBusy = false;
 get("review-export").onclick = async () => {
-  if (Object.keys(patch()).length && !await save(false)) return;
-  const generation=++previewGeneration;
-  get("confirm-export").disabled=true; reviewedExport=null;
-  get("export-fields").textContent=get("export-description").textContent="";
-  get("export-photos").replaceChildren();get("export-status").textContent="Checking selected JPEG files…";
-  get("export-review").showModal();
+  if (approvalBusy) return;
+  const item = current;
+  const button = get("review-export"), message = get("editor-status");
+  if (inlinePhotoPendingChanges()) {
+    message.textContent = "Save or discard your photo changes before approving."; return;
+  }
+  approvalBusy = true;
+  button.disabled = true;
+  button.textContent = "Verifying listing…";
   try {
-    const data=await request("/functions/v1/studio-api/export-preview",{method:"POST",body:JSON.stringify({id:current.id,revision:current.revision})});
-    const snapshot=data.snapshot;
-    if (generation!==previewGeneration) return;
-    get("export-fields").textContent=[snapshot.title,"$"+(snapshot.price||""),snapshot.condition].filter(Boolean).join(" · ");
-    get("export-description").textContent=snapshot.description;
-    for (const [position,file] of snapshot.images.entries()) {
-      const response=await fetch(data.urls[position],{cache:"no-store"});
-      if (!response.ok) throw Error("Photo download failed");
-      const bytes=await response.arrayBuffer();
-      const digest=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)),b=>b.toString(16).padStart(2,"0")).join("");
-      if (bytes.byteLength!==file.bytes || digest!==file.sha) throw Error("Photo verification failed");
-      if (generation!==previewGeneration) return;
-      const img=document.createElement("img"),url=URL.createObjectURL(new Blob([bytes],{type:"image/jpeg"}));
-      previewObjects.push(url);img.src=url;img.alt="Listing photo "+(position+1);img.width=144;
-      await img.decode();
-      if (generation!==previewGeneration) return;
-      get("export-photos").append(img);
+    if (Object.keys(patch()).length && !await save(false)) throw Error("Save your listing changes before approval.");
+    if (current.id !== item.id) throw Error("Product changed; reopen it before approving.");
+    // Server checks seller membership, identity, warehouse cover, and stale revisions.
+    const response = await request("/functions/v1/studio-api/export-preview", {
+      method: "POST", body: JSON.stringify({id:item.id,revision:current.revision})
+    });
+    const snapshot = response.snapshot;
+    if (!snapshot || snapshot.id !== item.id || snapshot.revision !== current.revision ||
+        !Array.isArray(snapshot.images) || !snapshot.images.length ||
+        snapshot.images.length > 10 || response.urls?.length !== snapshot.images.length) {
+      throw Error("The saved listing or photo set is incomplete.");
     }
-    reviewedExport=snapshot;get("confirm-export").disabled=false;
-    get("export-status").textContent="Review the listing text and photo order before approving.";
-  } catch(error) {if (generation===previewGeneration) get("export-status").textContent=error.message;}
-};
-get("close-export").onclick=()=>get("export-review").close();
-get("export-review").onclose=()=>{++previewGeneration;reviewedExport=null;previewObjects.splice(0).forEach(url=>URL.revokeObjectURL(url));};
-get("confirm-export").onclick=async ()=>{
-  const snapshot=reviewedExport;if (!snapshot) return;
-  get("confirm-export").disabled=true;
-  try {
-    await rpc("studio_approve_export",{p_item:snapshot.id,p_revision:snapshot.revision,p_snapshot:snapshot});
-    current.status="approved";render();get("export-review").close();openItem(current);
-    get("editor-status").textContent="Approved for Facebook handoff.";
-  } catch(error) {get("export-status").textContent=error.message;get("confirm-export").disabled=false;}
+    for (const [position,file] of snapshot.images.entries()) {
+      button.textContent = "Checking photo " + (position + 1) + "/" + snapshot.images.length + "…";
+      const fetched = await fetch(response.urls[position],{cache:"no-store"});
+      if (!fetched.ok) throw Error("Listing photo " + (position + 1) + " is unavailable.");
+      const bytes = await fetched.arrayBuffer();
+      const sha = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)),
+        value=>value.toString(16).padStart(2,"0")).join("");
+      if (bytes.byteLength !== file.bytes || sha !== file.sha) {
+        throw Error("Listing photo " + (position + 1) + " failed integrity verification.");
+      }
+    }
+    button.textContent = "Approving…";
+    await rpc("studio_approve_export",{
+      p_item:snapshot.id,p_revision:snapshot.revision,p_snapshot:snapshot
+    });
+    await refresh();
+    const updated = items.find(product=>product.id===item.id);
+    if (updated) openItem(updated);
+    message.textContent = "Approved — ready for Facebook handoff.";
+  } catch(error) {
+    get("editor-status").textContent = error.message || "Unable to approve listing.";
+  } finally {
+    approvalBusy = false;
+    button.disabled = false;
+    button.textContent = "Approve listing";
+  }
 };
 get("transfer-export").onclick=async ()=>{
   try {
@@ -632,6 +643,7 @@ get("transfer-export").onclick=async ()=>{
     }catch(error){if(serial===turn&&current===item)status.textContent=error.message;}
   }
   inlinePhotoLoader=load;
+  inlinePhotoPendingChanges=()=>!!data && JSON.stringify(order)!==JSON.stringify(data.selected);
   get("edit-photos").onclick=()=>{if(current)load(current);};
   previousButton.onclick=()=>{
     if(!data?.previous)return;
