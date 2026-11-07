@@ -6,6 +6,7 @@ const form = get("edit-form");
 const fields = ["title", "price", "condition", "model", "description", "source_url", "notes"];
 const auth = studioAuth.auth;
 let session, current, saving = false, items = [], view = "all", photoRequest = 0;
+let thumbnailGeneration = 0;
 const statusLabel = {review:"Review", approved:"Approved", listed:"Listed", archived:"Archived"};
 
 async function request(url, options = {}) {
@@ -218,9 +219,41 @@ function openItem(item) {
   ++photoRequest;
   get("hero").removeAttribute("src");
   get("photo-status").textContent = photos.length ? "" : "No selected original photos.";
+  const thumbnailTurn = ++thumbnailGeneration;
   get("thumbs").replaceChildren(...photos.map((photo,index) => {
     const button = document.createElement("button");
-    button.type = "button"; button.textContent = (photo.kind === "manufacturer" ? "Reference " : "Photo ") + (index + 1); button.onclick = () => preview(photo);
+    const label = (photo.kind === "manufacturer" ? "Reference " : "Photo ") + (index + 1);
+    const img = document.createElement("img"), caption = document.createElement("small");
+    button.type = "button";
+    button.setAttribute("aria-label", "Preview " + label);
+    button.style.cssText = "display:inline-flex;flex-direction:column;align-items:center;gap:5px;padding:6px;min-width:100px;min-height:105px;border:2px solid transparent;border-radius:10px;cursor:pointer";
+    img.alt = "";
+    img.loading = "lazy";
+    img.style.cssText = "width:96px;height:76px;object-fit:contain;background:#eef0f2;border-radius:6px";
+    caption.textContent = label;
+    caption.style.cssText = "font-size:12px;line-height:1.3";
+    button.append(img, caption);
+    button.onclick = () => {
+      get("thumbs").querySelectorAll("button").forEach(b => {
+        b.style.borderColor = "transparent"; b.setAttribute("aria-pressed", "false");
+      });
+      button.style.borderColor = "#1b75bc";
+      button.setAttribute("aria-pressed", "true");
+      preview(photo);
+    };
+    if (index === 0) { button.style.borderColor = "#1b75bc"; button.setAttribute("aria-pressed", "true"); }
+    else button.setAttribute("aria-pressed", "false");
+    (async () => {
+      try {
+        const route = photo.kind === "real"
+          ? "photo/" + encodeURIComponent(photo.sha)
+          : "reference/" + encodeURIComponent(item.id) + "/" + encodeURIComponent(photo.id);
+        const result = await request("/functions/v1/studio-api/" + route);
+        if (thumbnailTurn === thumbnailGeneration && current === item) img.src = result.url;
+      } catch (error) {
+        if (thumbnailTurn === thumbnailGeneration && current === item) img.title = "Thumbnail unavailable: " + error.message;
+      }
+    })();
     return button;
   }));
   if (photos.length) preview(photos[0]);
