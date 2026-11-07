@@ -1,9 +1,48 @@
 "use strict";
 const studioOrigins=new Set(["https://crazymoe-marketplace-studio.vercel.app","https://studio.crazymoe.com"]);
 const handoffRoot="https://sfheqjnxlkygjfohoybo.supabase.co";
+const studioPublicKey="sb_publishable_xfIVDlnktUiJYm5U_1jEtw_Res600Af";
+function validStudioSession(value){
+  return value && typeof value.access_token==="string" && value.access_token.split(".").length===3 &&
+    value.access_token.length<4096 && typeof value.refresh_token==="string" &&
+    value.refresh_token.length>=20 && value.refresh_token.length<1024 &&
+    Number.isFinite(Number(value.expires_at)) && Number(value.expires_at)>Date.now()/1000-120 &&
+    Number(value.expires_at)<Date.now()/1000+86400;
+}
+async function rememberStudioSession(value){
+  if(!validStudioSession(value))throw Error("Invalid Studio session");
+  const session={access_token:value.access_token,refresh_token:value.refresh_token,expires_at:Number(value.expires_at)};
+  await chrome.storage.session.set({studioAuthSession:session});
+  return session;
+}
+async function studioMemberToken(){
+  let {studioAuthSession:session}=await chrome.storage.session.get("studioAuthSession");
+  if(!validStudioSession(session))throw Error("Open the signed-in Studio once to connect this browser.");
+  if(session.expires_at>Date.now()/1000+45)return session.access_token;
+  const response=await fetch(handoffRoot+"/auth/v1/token?grant_type=refresh_token",{
+    method:"POST",headers:{apikey:studioPublicKey,"Content-Type":"application/json"},
+    body:JSON.stringify({refresh_token:session.refresh_token}),cache:"no-store"
+  });
+  if(!response.ok){await chrome.storage.session.remove("studioAuthSession");throw Error("Studio session expired. Reopen Studio.");}
+  const refreshed=await response.json();
+  session=await rememberStudioSession(refreshed);
+  return session.access_token;
+}
+async function studioMemberFetch(input,options={}){
+  const url=new URL(input,handoffRoot);
+  if(url.origin!==handoffRoot)throw Error("Invalid Studio API host");
+  const token=await studioMemberToken();
+  return fetch(url.href,{...options,cache:"no-store",headers:{...(options.headers||{}),apikey:studioPublicKey,Authorization:"Bearer "+token}});
+}
 chrome.runtime.onMessageExternal.addListener((message,sender,reply)=>{
-  if (!studioOrigins.has(sender.origin) || message?.type!=="STUDIO_APPROVED_DRAFT" || !/^[a-f0-9]{64}$/.test(message.token)) return false;
+  if(!studioOrigins.has(sender.origin))return false;
+  if(message?.type==="STUDIO_AUTH_SESSION"){
+    rememberStudioSession(message.session).then(()=>reply({ok:true})).catch(()=>reply({ok:false,error:"Invalid Studio session"}));
+    return true;
+  }
+  if(message?.type!=="STUDIO_APPROVED_DRAFT" || !/^[a-f0-9]{64}$/.test(message.token))return false;
   (async()=>{
+    if(message.session)await rememberStudioSession(message.session);
     const tab=await chrome.tabs.create({url:"about:blank"});
     await chrome.storage.session.set({["studioDraft"+tab.id]:message.token});
     await chrome.tabs.update(tab.id,{url:"https://www.facebook.com/marketplace/create/item"});
