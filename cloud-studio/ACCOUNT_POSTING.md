@@ -17,14 +17,14 @@ The `/posting.html` screen prepares copies of active Facebook inventory for anot
 - Current-user identity must match the destination numeric Facebook profile ID before field entry, before photos, and after attachment. Unreadable/ambiguous identity stops the operation.
 - Source availability and content digest are checked at preparation, claim, and immediately before filling. An inventory-change trigger cancels pending copies or flags existing/possibly published copies for removal.
 - Account row locking permits one unfinished draft per destination; failed transfers require explicit retry after inspecting the Facebook tab. Timeouts and failures never imply publication.
-- Fifteen-minute bearer capabilities are scoped to one copy, stored only in worker execution, and revoked on completion. Only the service role may redeem them through the dedicated endpoint. Normal RPCs require an enabled Studio member and ownership.
+- Fifteen-minute bearer capabilities are scoped to one copy, stored only in worker execution, and revoked on completion. Only the service role may redeem them through the dedicated endpoint. Normal RPCs require an enabled Studio member and ownership. Public RPCs are invoker wrappers around private implementations; no public posting RPC is SECURITY DEFINER.
 - Images must be selected from that source's archived public listing-images bucket. Originals are untouched. The existing verified native photo-upload path is reused.
 - Category and pickup location still require review in Facebook. Destination observation depends on the existing sync workflow being configured for that account; saving a link is not proof of live publication.
 - Full unattended posting, an account-independent guarantee against duplicate flags, and automatic removal from another Facebook account are not included.
 
 ## Files and verification
 
-- Database: `migrations/account_posting_queue.sql`, `migrations/account_posting_serial_queue.sql`.
+- Database: `migrations/account_posting_queue.sql`, `migrations/account_posting_serial_queue.sql`, `migrations/account_posting_private_functions.sql`, and `migrations/account_posting_service_access.sql`.
 - Edge function: `account-handoff/index.ts` (`studio-account-handoff`). JWT gateway checking is disabled because the function authenticates a scoped expiring transfer capability itself.
 - UI: `web/posting.html`, `web/posting.js`, `web/posting.css`, `web/posting-copy.js`.
 - Extension: `extension/account_queue_worker.js`; guarded installer `extension/install_account_queue.py` preserves the installed 68.1.20 cloud-auth/gallery modules.
