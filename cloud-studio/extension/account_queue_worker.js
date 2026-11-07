@@ -1,5 +1,6 @@
 /* Account-scoped posting handoff. Publication remains an explicit Facebook action. */
 'use strict';
+importScripts('posting-photo.js');
 const accountQueueEndpoint='https://sfheqjnxlkygjfohoybo.supabase.co/functions/v1/studio-account-handoff';
 const accountPhotoRoot='https://sfheqjnxlkygjfohoybo.supabase.co/storage/v1/object/public/listing-images/';
 let accountQueueBusy=false;
@@ -55,6 +56,21 @@ async function accountPhotos(urls){
   blobs.push({dataUrl:'data:'+mime+';base64,'+btoa(binary),name:'product-'+(i+1)+(jpg?'.jpg':png?'.png':'.webp')});
  }return blobs;
 }
+async function accountPreparedPhotos(packet){
+ if(!packet.item.photo_style)return {photos:await accountPhotos(packet.item.images),evidence:{}};
+ if(packet.item.photo_style!==PostingPhoto.VERSION||!Array.isArray(packet.item.photo_manifest)||packet.item.photo_manifest.length!==packet.item.images.length)throw Error('Prepare the photos again with the current Studio version');
+ const photos=[],receipts=[];let inputBytes=0,outputBytes=0;
+ for(const [i,url] of packet.item.images.entries()){
+  const expected=packet.item.photo_manifest[i];if(expected.url!==url||! /^[a-f0-9]{64}$/.test(expected.source_sha256||''))throw Error('Photo preparation does not match this product');
+  const output=await PostingPhoto.prepare(url,{profile:packet.profile_id,source:packet.source_id,expectedSha:expected.source_sha256});
+  inputBytes+=output.sourceBytes;outputBytes+=output.blob.size;
+  if(inputBytes>35*1024*1024||outputBytes>35*1024*1024)throw Error('Selected photos exceed the upload limit');
+  if(output.manifest.width!==expected.width||output.manifest.height!==expected.height)throw Error('Prepared photo dimensions changed');
+  photos.push({dataUrl:await PostingPhoto.dataUrl(output.blob),name:'item-'+packet.source_id+'-framed-'+(i+1)+'.jpg'});
+  receipts.push({...output.manifest,output_sha256:output.output_sha256});
+ }
+ return {photos,evidence:{photo_style:PostingPhoto.VERSION,photo_manifest:receipts}};
+}
 async function accountStagePhotos(tabId,photos){
  const rows=[];
  try{for(const [i,photo] of photos.entries()){
@@ -70,7 +86,7 @@ async function accountFill(token){
   tab=await chrome.tabs.create({url:'https://www.facebook.com/marketplace/create/item',active:true});
   await accountWaitTab(tab.id);
   await accountAssertSeller(tab.id,packet.profile_id);
-  const photos=await accountPhotos(packet.item.images);
+  const photoPacket=await accountPreparedPhotos(packet),photos=photoPacket.photos;
   // Recheck both stock and account after downloads, immediately before editing.
   packet=await accountTransfer(token,'read');
   await accountAssertSeller(tab.id,packet.profile_id);
@@ -91,7 +107,7 @@ async function accountFill(token){
   await waitFacebookPhotoCount(tab.id,photos.length);
   await waitFacebookFields(tab.id,prepared);await waitFacebookCondition(tab.id,prepared.condition);
   await accountAssertSeller(tab.id,packet.profile_id);
-  await accountTransfer(token,'filled',{profile_id:packet.profile_id,photo_count:photos.length});
+  await accountTransfer(token,'filled',{profile_id:packet.profile_id,photo_count:photos.length,...photoPacket.evidence});
   await scheduleStagedPhotoCleanup(staged);staged=[];
   await chrome.scripting.executeScript({target:{tabId:tab.id},func:()=>{
    const note=document.getElementById('__moe_account_queue__');if(note)note.textContent+=' Fields and photos verified. Check category and location, publish on Facebook, then record the new listing link in Studio to continue.';
@@ -104,7 +120,7 @@ async function accountFill(token){
 }
 chrome.runtime.onMessageExternal.addListener((message,sender,reply)=>{
  if(!studioOrigins.has(sender.origin))return false;
- if(message?.type==='STUDIO_ACCOUNT_QUEUE_CHECK'){reply({ready:true,version:1});return false;}
+ if(message?.type==='STUDIO_ACCOUNT_QUEUE_CHECK'){reply({ready:true,version:2,photo_style:PostingPhoto.VERSION});return false;}
  if(message?.type==='STUDIO_ACCOUNT_QUEUE_IDENTIFY'){
   (async()=>{const tab=await chrome.tabs.create({url:'https://www.facebook.com/marketplace/create/item',active:true});await accountWaitTab(tab.id);
    const result=await chrome.scripting.executeScript({target:{tabId:tab.id},world:'ISOLATED',func:accountCurrentSeller});
