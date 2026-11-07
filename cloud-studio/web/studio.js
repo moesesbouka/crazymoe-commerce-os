@@ -452,7 +452,7 @@ get("review-export").onclick = async () => {
   button.disabled = true;
   button.textContent = "Verifying listing…";
   try {
-    if (Object.keys(patch()).length && !await save(false)) throw Error("Save your listing changes before approval.");
+    if (Object.keys(patch(true)).length && !await save(false)) throw Error("Save your listing changes before approval.");
     if (current.id !== item.id) throw Error("Product changed; reopen it before approving.");
     // Server checks seller membership, identity, warehouse cover, and stale revisions.
     const response = await request("/functions/v1/studio-api/export-preview", {
