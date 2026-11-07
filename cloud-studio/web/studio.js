@@ -7,6 +7,12 @@ const fields = ["title", "price", "condition", "model", "description", "source_u
 const auth = studioAuth.auth;
 let session, current, saving = false, items = [], view = "all", photoRequest = 0;
 let thumbnailGeneration = 0;
+const selectedItems = new Set();
+let layout = "queue";
+let useSavedReference = async () => {};
+let resetManualPhoto = () => {};
+let addingPhotos = false;
+function setAddingPhotos(active){addingPhotos=active;for(const key of fields)form.elements[key].disabled=active;}
 const statusLabel = {review:"Review", approved:"Approved", listed:"Listed", archived:"Archived"};
 
 async function request(url, options = {}) {
@@ -40,6 +46,7 @@ async function connectStudioExtension(){
 // Missing migrated fields may use prepared suggestions; explicit seller values,
 // including empty strings, always win. Suggestions are persisted before review.
 function editorValue(item, key) {
+  if (key === "condition" && !String(item.fields[key] ?? "").trim() && item.field_sources?.condition !== "seller") return "New";
   if (Object.hasOwn(item.fields, key)) return String(item.fields[key] ?? "");
   if (key === "condition") return "New";
   if (["title", "model", "price", "description", "source_url"].includes(key))
@@ -47,12 +54,24 @@ function editorValue(item, key) {
   return "";
 }
 const title = item => editorValue(item, "title") || item.id;
-const matchesView = (item, key) => key === "all" || item.status === (key === "ready" ? "approved" : key);
+function category(item){
+  if(item.fields.category)return item.fields.category;
+  const text=title(item).toLowerCase();
+  if(/desk|table|dresser|cabinet|nightstand|trundle|loft/.test(text))return "Furniture";
+  if(/speaker|amplifier|preamplifier|receiver|subwoofer|tuner|soundbar|audio|turntable/.test(text))return "Audio";
+  if(/heater|radiator|fan|dehumidifier/.test(text))return "Heating & cooling";
+  if(/vacuum|floor washer|tineco|dyson/.test(text))return "Floor care";
+  if(/tv|television|display|projector|monitor|screen/.test(text))return "TV & displays";
+  if(/adapter|controller|remote|hdmi|connect|poe/.test(text))return "Electronics & accessories";
+  return "Other";
+}
+function needsRepair(item) { return item.media_health ? !item.media_health.export_ready : !(item.exports_verified && item.photo_selection?.length); }
+const matchesView = (item, key) => key === "all" || (key === "repair" ? needsRepair(item) : item.status === (key === "ready" ? "approved" : key));
 function filtered() {
   const query = get("search").value.trim().toLowerCase();
-  return items.filter(item => matchesView(item, view) && [title(item),editorValue(item,"model"),item.id].join(" ").toLowerCase().includes(query));
+  return items.filter(item => matchesView(item, view) && (!get("category-filter").value || category(item) === get("category-filter").value) && [title(item),editorValue(item,"model"),item.id].join(" ").toLowerCase().includes(query));
 }
-// Cards show a seller-selected warehouse cover where possible, but never private
+// Cards respect the seller-selected cover, but never private
 // label/barcode reference images. URLs are short-lived and fetched only when visible.
 const coverCache = new Map();
 const coverJobs = [];
@@ -79,14 +98,11 @@ function productCover(item, card) {
   label.textContent = "Loading photo…";
   frame.append(label);
   const selection = Array.isArray(item.photo_selection) ? item.photo_selection : [];
-  const photo = selection.find(p => p.kind === "real" && p.sha)
-    || selection.find(p => p.kind === "manufacturer" && p.id);
-  if (!photo) {
-    label.textContent = "Product photo needed";
-    return frame;
-  }
+  const photo = selection[0] || (item.media_health?.preview_reference ? {kind:"manufacturer",id:item.media_health.preview_reference,referenceOnly:true} : null);
+  if (!photo) { label.textContent = "Add a listing photo"; return frame; }
   const key = photo.kind === "real" ? "photo/" + encodeURIComponent(photo.sha)
     : "reference/" + encodeURIComponent(item.id) + "/" + encodeURIComponent(photo.id);
+  if(photo.referenceOnly) { const badge=document.createElement("small"); badge.className="reference-badge";badge.textContent="Reference · not selected";frame.append(badge); }
   const image = document.createElement("img");
   image.alt = "Product photo for " + title(item);
   image.loading = "lazy";
@@ -94,15 +110,10 @@ function productCover(item, card) {
   image.referrerPolicy = "no-referrer";
   const load = async () => {
     try {
-      const cached = coverCache.get(key);
-      const url = cached && Date.now() - cached.time < 180000 ? cached.url
-        : (await request("/functions/v1/studio-api/" + key)).url;
-      if (!cached || url !== cached.url) coverCache.set(key,{url,time:Date.now()});
       if (!card.isConnected) return;
-      image.onload = () => {label.remove();};
-      image.onerror = () => {image.remove();label.textContent = "Photo unavailable";coverCache.delete(key);};
       frame.append(image);
-      image.src = url;
+      await studioImages.load(image,key,()=>card.isConnected);
+      label.remove();
     } catch(error) {
       if (card.isConnected) label.textContent = "Photo unavailable";
     }
@@ -111,30 +122,53 @@ function productCover(item, card) {
   if (coverObserver) coverObserver.observe(card); else card._loadCover();
   return frame;
 }
+function updateBulkBar() {
+  get("bulk-bar").hidden = !selectedItems.size;
+  get("bulk-count").textContent = selectedItems.size + " selected";
+  get("select-visible").checked = filtered().length>0 && filtered().every(i=>selectedItems.has(i.id));
+}
 function render() {
   const visible = filtered();
+  get("cards").classList.toggle("queue",layout==="queue");
   get("cards").replaceChildren(...visible.map(item => {
-    const card = document.createElement("button");
-    card.className = "inventory-card";
-    const name = document.createElement("strong"), summary = document.createElement("small");
-    name.textContent = title(item);
-    summary.textContent = [statusLabel[item.status], item.fields.price && "$" + item.fields.price, item.id].filter(Boolean).join(" · ");
-    const body = document.createElement("div");
-    body.className = "product-card-body";
-    body.append(name,summary);
-    const cover = productCover(item,card);
-    card.append(cover,body);
-    card.onclick = () => openItem(item);
-    return card;
+    const wrap=document.createElement("article");wrap.className="queue-row";
+    const check=document.createElement("input");check.type="checkbox";check.className="item-check";
+    check.setAttribute("aria-label","Select "+title(item));check.checked=selectedItems.has(item.id);
+    check.onchange=()=>{check.checked?selectedItems.add(item.id):selectedItems.delete(item.id);updateBulkBar();};
+    const card = document.createElement("button"); card.className = "inventory-card";
+    const name=document.createElement("strong"),summary=document.createElement("small"),body=document.createElement("div");
+    name.textContent=title(item);summary.textContent=[editorValue(item,"model"),category(item)].filter(Boolean).join(" · ") || "Inventory item";
+    body.className="product-card-body";body.append(name,summary);
+    const details=document.createElement("div");details.className="card-facts";
+    const price=document.createElement("strong");price.className="card-price";
+    price.textContent=editorValue(item,"price")?"$"+editorValue(item,"price"):"Set price";
+    const status=document.createElement("span");status.className="status-chip "+(needsRepair(item)?"repair":item.status);
+    status.textContent=needsRepair(item)?"Photos need attention":statusLabel[item.status];
+    const photos=document.createElement("small");photos.textContent=(item.photo_selection?.length||0)+" selected"+(item.media_health?.references?" · "+item.media_health.references+" references":"");
+    details.append(price,status,photos);
+    card.append(productCover(item,card),body,details);card.onclick=()=>openItem(item);
+    wrap.append(check,card);return wrap;
   }));
-  get("results").textContent = visible.length + " products";
+  if(!visible.length){const empty=document.createElement("p");empty.className="empty";empty.textContent="No products match these filters.";get("cards").append(empty);}
+  get("results").textContent = visible.length + " product" + (visible.length===1?"":"s");
   document.querySelectorAll("[data-view]").forEach(button => {
-    const key = button.dataset.view;
-    button.classList.toggle("active", key === view);
-    get("count-" + key).textContent = items.filter(item => matchesView(item,key)).length;
+    const key=button.dataset.view;button.classList.toggle("active",key===view);
+    get("count-"+key).textContent=items.filter(item=>matchesView(item,key)).length;
   });
+  get("metric-total").textContent=items.length;
+  get("metric-ready").textContent=items.filter(i=>i.status==="approved").length;
+  get("metric-photos").textContent=items.filter(needsRepair).length;
+  get("metric-price").textContent=items.filter(i=>!editorValue(i,"price")).length;
+  updateBulkBar();
 }
-async function refresh() { items = (await rpc("studio_state")).filter(item => item.lifecycle !== "archived"); render(); }
+async function refresh() {
+  items=(await rpc("studio_state")).filter(item=>item.lifecycle!=="archived");
+  const cat=get("category-filter"),value=cat.value;
+  cat.replaceChildren(new Option("All categories",""),...Array.from(new Set(items.map(category))).sort().map(v=>new Option(v,v)));
+  cat.value=value;
+  for(const id of selectedItems)if(!items.some(i=>i.id===id))selectedItems.delete(id);
+  render();
+}
 function notice(message) { get("message").hidden = !message; get("message").textContent = message; }
 async function openWorkspace(authSession) {
   session = authSession;
@@ -222,17 +256,21 @@ document.querySelectorAll("[data-view]").forEach(button => button.onclick = () =
   get("view-title").textContent = button.firstChild.textContent.trim();
   render();
 });
-async function preview(photo) {
-  const sequence = ++photoRequest;
-  get("hero").removeAttribute("src");
-  get("photo-status").textContent = "Loading photo…";
+async function preview(photo, referenceOnly=false) {
+  const sequence=++photoRequest,item=current,hero=get("hero");
+  hero.hidden=true;hero.removeAttribute("src");get("hero-empty").hidden=false;
+  get("hero-empty").textContent="Loading photo…";
+  get("photo-status").textContent=referenceOnly?"Saved reference preview · choose Use in listing to add it.":"";
+  const key=photo.kind==="real"?"photo/"+encodeURIComponent(photo.sha):"reference/"+encodeURIComponent(item.id)+"/"+encodeURIComponent(photo.id);
   try {
-    const result = await request("/functions/v1/studio-api/" + (photo.kind === "real" ? "photo/"+encodeURIComponent(photo.sha) : "reference/"+encodeURIComponent(current.id)+"/"+encodeURIComponent(photo.id)));
-    if (sequence === photoRequest) { get("hero").src = result.url; get("photo-status").textContent = ""; }
-  } catch(error) { if (sequence === photoRequest) get("photo-status").textContent = error.message; }
+    await studioImages.load(hero,key,()=>sequence===photoRequest&&current===item);
+    if(sequence===photoRequest&&current===item){hero.hidden=false;hero.style.display="";get("hero-empty").hidden=true;}
+  } catch(error) { if(sequence===photoRequest){hero.hidden=true;get("hero-empty").textContent="Photo unavailable. Refresh photos to retry.";get("photo-status").textContent=error.message;} }
 }
 let inlinePhotoLoader = () => {};
 let inlinePhotoPendingChanges = () => false;
+let inlinePhotoSave = async () => {};
+let bulkMode = false;
 let stopRenderStatus = () => {};
 function renderCatalogEvidence(item) {
   const list = get("catalog-evidence-list");
@@ -258,10 +296,11 @@ function renderCatalogEvidence(item) {
 }
 function openItem(item) {
   stopRenderStatus();
+  resetManualPhoto();
   current = item;
   get("transfer-export").hidden = item.status !== "approved";
   get("edit-title").textContent = title(item);
-  get("editor-status").textContent = "";
+  get("editor-status").textContent = "Saved · revision " + item.revision;
   for (const key of fields) {
     const input = form.elements[key], value = editorValue(item,key);
     if (key === "condition" && value && !Array.from(input.options).some(option => option.value === value)) input.add(new Option(value,value));
@@ -271,7 +310,20 @@ function openItem(item) {
     input.dataset.initial = value;
     input.dataset.saved = String(item.fields[key] ?? "");
   }
-  get("diagnostics").textContent = statusLabel[item.status] + " · Revision " + item.revision;
+  get("diagnostics").replaceChildren();
+  const checks=document.createElement("div");checks.className="readiness-checks";
+  for(const [label,ok] of [["Photos",!needsRepair(item)],["Price",Number(editorValue(item,"price"))>0],["Title",!!editorValue(item,"title")],["Description",!!editorValue(item,"description")]]) {
+    const chip=document.createElement("span");chip.className=ok?"check-ok":"check-needed";chip.textContent=(ok?"✓ ":"! ")+label;checks.append(chip);
+  }
+  get("diagnostics").append(checks);
+  if(item.identity_status && item.identity_status!=="verified_exact") {
+    const info=document.createElement("details"),summary=document.createElement("summary"),text=document.createElement("p");
+    summary.textContent="Product identity · "+item.identity_status.replaceAll("_"," ");
+    text.textContent=item.research?.manufacturer_research?.reason || "The exact product model is not independently confirmed. Review the evidence before using model-specific details.";
+    info.append(summary,text);get("diagnostics").append(info);
+  }
+  get("suggested-description").value=item.generated_candidate?.description || "";
+  get("use-copy").disabled=!get("suggested-description").value;
   renderCatalogEvidence(item);
   const evidence = item.visual_proposal;
   if (evidence) {
@@ -292,50 +344,20 @@ function openItem(item) {
     }
     get("diagnostics").append(panel);
   }
-  const photos = item.photo_selection.filter(photo => (photo.kind === "real" && photo.sha) || (photo.kind === "manufacturer" && photo.id));
+  const photos = (item.photo_selection||[]).filter(photo => (photo.kind === "real" && photo.sha) || (photo.kind === "manufacturer" && photo.id));
   ++photoRequest;
   get("hero").removeAttribute("src");
-  get("photo-status").textContent = photos.length ? "" : "No selected original photos.";
-  const thumbnailTurn = ++thumbnailGeneration;
-  get("thumbs").replaceChildren(...photos.map((photo,index) => {
-    const button = document.createElement("button");
-    const label = (photo.kind === "manufacturer" ? "Reference " : "Photo ") + (index + 1);
-    const img = document.createElement("img"), caption = document.createElement("small");
-    button.type = "button";
-    button.setAttribute("aria-label", "Preview " + label);
-    button.style.cssText = "display:inline-flex;flex-direction:column;align-items:center;gap:5px;padding:6px;min-width:100px;min-height:105px;border:2px solid transparent;border-radius:10px;cursor:pointer";
-    img.alt = "";
-    img.loading = "lazy";
-    img.style.cssText = "width:96px;height:76px;object-fit:contain;background:#eef0f2;border-radius:6px";
-    caption.textContent = label;
-    caption.style.cssText = "font-size:12px;line-height:1.3";
-    button.append(img, caption);
-    button.onclick = () => {
-      get("thumbs").querySelectorAll("button").forEach(b => {
-        b.style.borderColor = "transparent"; b.setAttribute("aria-pressed", "false");
-      });
-      button.style.borderColor = "#1b75bc";
-      button.setAttribute("aria-pressed", "true");
-      preview(photo);
-    };
-    if (index === 0) { button.style.borderColor = "#1b75bc"; button.setAttribute("aria-pressed", "true"); }
-    else button.setAttribute("aria-pressed", "false");
-    (async () => {
-      try {
-        const route = photo.kind === "real"
-          ? "photo/" + encodeURIComponent(photo.sha)
-          : "reference/" + encodeURIComponent(item.id) + "/" + encodeURIComponent(photo.id);
-        const result = await request("/functions/v1/studio-api/" + route);
-        if (thumbnailTurn === thumbnailGeneration && current === item) img.src = result.url;
-      } catch (error) {
-        if (thumbnailTurn === thumbnailGeneration && current === item) img.title = "Thumbnail unavailable: " + error.message;
-      }
-    })();
-    return button;
-  }));
+  get("hero-empty").hidden=!!photos.length;
+  get("hero-empty").textContent="No listing photos selected. Choose a saved reference or add a photo below.";
+  get("hero").hidden = !photos.length;
+  get("hero").style.display = photos.length ? "" : "none";
+  get("photo-status").textContent = photos.length ? "" : "No listing photos selected yet. Your saved manufacturer references may be available below under Photos & cover.";
+  get("thumbs").replaceChildren();
   if (photos.length) preview(photos[0]);
+  else if(item.media_health?.preview_reference)preview({kind:"manufacturer",id:item.media_health.preview_reference},true);
   if (!get("editor").open) get("editor").showModal();
   inlinePhotoLoader(item);
+  get("editor").querySelectorAll(".photo-pane,.details-pane,.editor-grid").forEach(el=>el.scrollTop=0);
   monitorRender(item);
 }
 get("record-catalog-evidence").onclick=async()=>{
@@ -380,12 +402,13 @@ function patch(includePrefills = false) {
     form.elements[key].value !== form.elements[key].dataset[includePrefills ? "saved" : "initial"])
     .map(key => [key,form.elements[key].value]));
 }
-function canLeave() { return !saving && (!Object.keys(patch()).length || confirm("Discard your unsaved changes?")); }
+function canLeave() { return !saving && !approvalBusy && !addingPhotos && (!(Object.keys(patch()).length || inlinePhotoPendingChanges()) || confirm("Discard your unsaved listing and photo changes?")); }
 function next(id) {
-  const list = filtered(), index = list.findIndex(item => item.id === id);
+  const list = bulkMode ? filtered().filter(i=>selectedItems.has(i.id)) : filtered(), index = list.findIndex(item => item.id === id);
   if (index >= 0 && list[index + 1]) openItem(list[index + 1]); else get("editor").close();
 }
 async function save(advance, propagate = false) {
+  if(addingPhotos){get("editor-status").textContent="Wait for photo upload to finish.";return;}
   if (saving) return false;
   const item = current, changes = patch(true);
   saving = true;
@@ -396,6 +419,7 @@ async function save(advance, propagate = false) {
       const updated = await rpc("studio_seller_patch",{p_id:item.id,p_expected_revision:item.revision,p_patch:changes});
       Object.assign(item,{fields:updated.fields,revision:updated.revision,status:updated.status || (item.status==="approved"?"review":item.status)});
     }
+    if(inlinePhotoPendingChanges()){await inlinePhotoSave(item);await refresh();Object.assign(item,items.find(i=>i.id===item.id)||{});}
     render(); if (advance) next(item.id); else {openItem(item); get("editor-status").textContent = "Saved.";}
     return true;
   } catch(error) {
@@ -417,11 +441,18 @@ get("upload-form").onsubmit = async event => {
   event.preventDefault();
   const picker = get("files"), button = event.currentTarget.querySelector("button");
   const photos = Array.from(picker.files), message = get("upload-status");
-  if (!photos.length || photos.length > 12 || photos.some(file => file.size > 16*1024*1024)) {
-    message.textContent = "Choose up to 12 photos, each 16 MB or smaller."; return;
+  if (!photos.length || photos.length > 10 || photos.some(file => file.size > 16*1024*1024)) {
+    message.textContent = "Choose up to 10 photos, each 16 MB or smaller."; return;
   }
   button.disabled = picker.disabled = true;
-  uploadBatch ||= crypto.randomUUID();
+  // Keep the idempotency key across reconnect/reload; only hashes and a batch ID.
+  let uploadKey;
+  try {
+    const hashes=await Promise.all(photos.map(async file=>[...new Uint8Array(await crypto.subtle.digest("SHA-256",await file.arrayBuffer()))].map(v=>v.toString(16).padStart(2,"0")).join("")));
+    uploadKey="studio-upload:"+session.user.id+":"+hashes.join(":");
+    uploadBatch=sessionStorage.getItem(uploadKey)||crypto.randomUUID();
+    sessionStorage.setItem(uploadKey,uploadBatch);
+  } catch(error){message.textContent="Unable to initialize upload: "+error.message;button.disabled=picker.disabled=false;return;}
   try {
     const manifest = [];
     for (const file of photos) {
@@ -444,7 +475,7 @@ get("upload-form").onsubmit = async event => {
     message.textContent = "Verifying originals…";
     const completed = await request("/functions/v1/studio-api/intake",{method:"POST",body:JSON.stringify({batch:uploadBatch,files:manifest})});
     message.textContent = "Added product " + completed.id;
-    picker.value = ""; uploadBatch = null;
+    picker.value = ""; sessionStorage.removeItem(uploadKey); uploadBatch = null;
     await refresh();
     const item = items.find(product => product.id===completed.id);
     if (item) openItem(item);
@@ -455,19 +486,16 @@ get("upload-form").onsubmit = async event => {
 // then submit the existing revision-checked approval RPC. Never show a second dialog.
 let approvalBusy = false;
 get("review-export").onclick = async () => {
-  if (approvalBusy) return;
+  if (approvalBusy || addingPhotos) return;
   const item = current;
   const button = get("review-export"), message = get("editor-status");
-  if (inlinePhotoPendingChanges()) {
-    message.textContent = "Save or discard your photo changes before approving."; return;
-  }
   approvalBusy = true;
   button.disabled = true;
   button.textContent = "Verifying listing…";
   try {
-    if (Object.keys(patch(true)).length) await save(false, true);
+    if (Object.keys(patch(true)).length || inlinePhotoPendingChanges()) await save(false, true);
     if (current.id !== item.id) throw Error("Product changed; reopen it before approving.");
-    // Server checks seller membership, identity, warehouse cover, and stale revisions.
+    // Server checks membership, saved fields, eligible media and stale revisions.
     const response = await request("/functions/v1/studio-api/export-preview", {
       method: "POST", body: JSON.stringify({id:item.id,revision:current.revision})
     });
@@ -477,17 +505,7 @@ get("review-export").onclick = async () => {
         snapshot.images.length > 10 || response.urls?.length !== snapshot.images.length) {
       throw Error("The saved listing or photo set is incomplete.");
     }
-    for (const [position,file] of snapshot.images.entries()) {
-      button.textContent = "Checking photo " + (position + 1) + "/" + snapshot.images.length + "…";
-      const fetched = await fetch(response.urls[position],{cache:"no-store"});
-      if (!fetched.ok) throw Error("Listing photo " + (position + 1) + " is unavailable.");
-      const bytes = await fetched.arrayBuffer();
-      const sha = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)),
-        value=>value.toString(16).padStart(2,"0")).join("");
-      if (bytes.byteLength !== file.bytes || sha !== file.sha) {
-        throw Error("Listing photo " + (position + 1) + " failed integrity verification.");
-      }
-    }
+    await studioWorkflows.verifyPhotos(response);
     button.textContent = "Approving…";
     await rpc("studio_approve_export",{
       p_item:snapshot.id,p_revision:snapshot.revision,p_snapshot:snapshot
@@ -541,11 +559,6 @@ get("transfer-export").onclick=async ()=>{
       const from=order.indexOf(id),to=from+offset;
       if(from<0||to<0||to>=order.length)return;
       const candidate=[...order];candidate.splice(from,1);candidate.splice(to,0,id);
-      const firstFactory=candidate.findIndex(key=>data.choices.find(c=>c.id===key)?.source.kind==="manufacturer");
-      if(firstFactory>=0&&candidate.slice(firstFactory+1).some(key=>
-        data.choices.find(c=>c.id===key)?.source.kind==="real")) {
-        status.textContent="Warehouse photos must stay before factory references.";return;
-      }
       order=candidate;draw();
     };
     function action(parent,label,disabled,fn) {
@@ -560,7 +573,8 @@ get("transfer-export").onclick=async ()=>{
       const imageButton=document.createElement("button");imageButton.type="button";
       imageButton.className="photo-preview";imageButton.title="Preview larger photo";
       const img=document.createElement("img");img.alt="Product thumbnail";img.loading="lazy";
-      if(urls.get(choice.id))img.src=urls.get(choice.id);
+      const key=photoPath(choice.source,product.id);
+      studioImages.load(img,key,()=>tile.isConnected).catch(()=>{img.hidden=true;const error=document.createElement("span");error.className="image-error";error.textContent="Photo unavailable · Refresh photos";imageButton.append(error);});
       imageButton.append(img);imageButton.onclick=()=>preview(choice.source);
       const name=document.createElement("span");
       name.className="photo-label";
@@ -568,14 +582,9 @@ get("transfer-export").onclick=async ()=>{
         (idx===0?" · COVER":on?" · Selected":" · Available");
       const controls=document.createElement("div");controls.className="photo-tile-controls";
       tile.append(imageButton,name,controls);
-      if(!on) action(controls,"Add",order.length>=10,()=>{
-        if(choice.source.kind==="real"){
-          const firstFactory=order.findIndex(id=>data.choices.find(c=>c.id===id)?.source.kind==="manufacturer");
-          if(firstFactory>=0)order.splice(firstFactory,0,choice.id);else order.push(choice.id);
-        }else order.push(choice.id);
-      });
+      if(!on) action(controls,"Add",order.length>=10,()=>order.push(choice.id));
       else {
-        if(choice.source.kind==="real"&&idx>0)
+        if(idx>0)
           action(controls,"Make cover",false,()=>{order.splice(idx,1);order.unshift(choice.id);});
         action(controls,"←",idx===0,()=>move(choice.id,-1));
         action(controls,"→",idx===order.length-1,()=>move(choice.id,1));
@@ -600,7 +609,7 @@ get("transfer-export").onclick=async ()=>{
       const heading=document.createElement("h4");
       heading.textContent="Saved manufacturer / retailer photos";
       const explanation=document.createElement("p");explanation.className="muted";
-      explanation.textContent="Preview available. These references are not yet prepared as verified Facebook export photos; they are not automatically added to the listing.";
+      explanation.textContent="Saved privately. Preview a photo, then choose Use in listing to prepare and add it. Your current cover stays first.";
       const grid=document.createElement("div");grid.className="factory-reference-grid";
       for(const ref of hidden) {
         const tile=document.createElement("div");tile.className="photo-tile reference-only";
@@ -608,22 +617,23 @@ get("transfer-export").onclick=async ()=>{
         btn.title="Preview factory/reference photograph";
         const img=document.createElement("img");img.alt="Factory reference thumbnail";img.loading="lazy";
         const key="reference/"+encodeURIComponent(product.id)+"/"+encodeURIComponent(ref.id);
-        if(urls.get(key))img.src=urls.get(key);
-        btn.append(img);btn.onclick=()=>preview({kind:"manufacturer",id:ref.id});
+        studioImages.load(img,key,()=>tile.isConnected).catch(()=>{img.hidden=true;const error=document.createElement("span");error.className="image-error";error.textContent="Photo unavailable · Refresh photos";btn.append(error);});
+        btn.append(img);btn.onclick=()=>preview({kind:"manufacturer",id:ref.id},true);
         const label=document.createElement("small");
         label.textContent=ref.label||"Factory/reference photo · preview only";
-        tile.append(btn,label);grid.append(tile);
+        const use=document.createElement("button");use.type="button";use.className="secondary";use.textContent="Use in listing";
+        use.onclick=()=>useSavedReference(product,ref,use);
+        tile.append(btn,label,use);grid.append(tile);
       }
       referencesBox.append(heading,explanation,grid);
     }
-    const isReal=chosen.length&&chosen[0].source.kind==="real";
-    saveButton.disabled=savingPhotos||!isReal||chosen.length>10||
+    saveButton.disabled=savingPhotos||!chosen.length||chosen.length>10||
       JSON.stringify(order)===JSON.stringify(data.selected);
     previousButton.hidden=!data.previous;
   }
   async function load(item) {
     const serial=++turn;product=item;data=null;refs=[];order=[];urls.clear();
-    list.replaceChildren();referencesBox.replaceChildren();saveButton.disabled=true;
+    list.replaceChildren();referencesBox.replaceChildren();saveButton.disabled=true;count.textContent="Loading photos…";
     status.textContent="Loading all prepared photos and saved factory references…";
     try {
       const response=await Promise.allSettled([
@@ -636,30 +646,15 @@ get("transfer-export").onclick=async ()=>{
       if(data.listing_revision!==item.revision)throw Error("Listing changed; refresh before editing photos.");
       order=(Array.isArray(data.selected)?data.selected:[]).filter(id=>data.choices.some(c=>c.id===id));
       refs=response[1].status==="fulfilled"&&Array.isArray(response[1].value)?response[1].value:[];
-      status.textContent=data.choices.length?"":"No prepared photos available. Add at least one public-safe warehouse photo.";
+      status.textContent=data.choices.length?"":"Choose a saved reference or add a product photo to start this gallery.";
       if(response[1].status==="rejected")status.textContent+=" Manufacturer reference lookup unavailable.";
       draw();
-      const todo=[
-        ...data.choices.map(c=>({key:c.id,path:photoPath(c.source,item.id)})),
-        ...refs.filter(r=>!data.choices.some(c=>c.source.id===r.id))
-          .map(r=>({key:"reference/"+encodeURIComponent(item.id)+"/"+encodeURIComponent(r.id),
-            path:"reference/"+encodeURIComponent(item.id)+"/"+encodeURIComponent(r.id)}))
-      ];
-      let index=0;
-      await Promise.allSettled(Array.from({length:Math.min(4,todo.length)},async()=>{
-        while(index<todo.length) {
-          const t=todo[index++];
-          try {
-            const photo=await request("/functions/v1/studio-api/"+t.path);
-            if(serial===turn&&current===item){urls.set(t.key,photo.url);draw();}
-          }catch(error){/* Leave the photo unselected; never guess a URL. */}
-        }
-      }));
+      if(!item.photo_selection?.length && refs.length && !item.media_health?.preview_reference)preview({kind:"manufacturer",id:refs[0].id},true);
     }catch(error){if(serial===turn&&current===item)status.textContent=error.message;}
   }
   inlinePhotoLoader=load;
   inlinePhotoPendingChanges=()=>!!data && JSON.stringify(order)!==JSON.stringify(data.selected);
-  get("edit-photos").onclick=()=>{if(current)load(current);};
+  get("edit-photos").onclick=()=>{if(current && (!inlinePhotoPendingChanges() || confirm("Discard unsaved photo changes and refresh?"))){studioImages.clear();load(current);}};
   previousButton.onclick=()=>{
     if(!data?.previous)return;
     order=data.previous.filter(id=>data.choices.some(c=>c.id===id));
@@ -669,28 +664,213 @@ get("transfer-export").onclick=async ()=>{
     if(!data||savingPhotos)return;
     order=[...data.selected];status.textContent="Unsaved photo changes discarded.";draw();
   };
-  saveButton.onclick=async()=>{
-    if(savingPhotos||!data)return;
-    if(Object.keys(patch()).length){
-      status.textContent="Save listing text changes before saving photo choices.";return;
-    }
-    if(!order.length||data.choices.find(c=>c.id===order[0])?.source.kind!=="real"){
-      status.textContent="Select an actual warehouse photograph as the cover.";return;
-    }
-    savingPhotos=true;draw();status.textContent="Saving photo choices…";
-    const savingItem=product;
-    try{
-      await rpc("studio_save_photo_choices",{
-        p_item:savingItem.id,p_listing_revision:data.listing_revision,
-        p_photo_revision:data.revision,p_choices:order
-      });
-      await refresh();
-      const updated=items.find(i=>i.id===savingItem.id);
-      if(updated){
-        openItem(updated);
-        get("editor-status").textContent="Photo choices saved; review the updated draft before approval.";
-      }else status.textContent="Saved. Refresh inventory to see the updated product.";
+  inlinePhotoSave=async(item)=>{
+    if(!data||product.id!==item.id||!inlinePhotoPendingChanges())return;
+    if(!order.length||order.length>10)throw Error("Select one to ten listing photos.");
+    const nextRevision=await rpc("studio_save_photo_choices",{p_item:item.id,p_listing_revision:item.revision,p_photo_revision:data.revision,p_choices:[...order]});
+    data.revision=nextRevision;data.listing_revision=item.revision;data.selected=[...order];
+  };
+  saveButton.onclick=()=>save(false);
+
+}
+
+
+// Owner-managed additions to an existing listing, including external product photos.
+// Photos are normalized to JPEG in the browser, SHA-256 checked in the private
+// upload gateway, and appended with existing order and seller copy preserved.
+{
+  const photoPanel=document.createElement("section");
+  photoPanel.className="manual-photo-panel";
+  photoPanel.style.cssText="margin-top:20px;padding:16px;border:1px solid #c9d6e1;border-radius:12px;background:#f7fafc";
+  photoPanel.innerHTML='<h4 style="margin:0 0 8px">Add photos to this listing</h4>'+
+    '<p style="margin:0 0 12px">Upload new warehouse pictures or product photos you saved. No separate listing is created. Up to 10 selected photos per listing.</p>'+
+    '<label>Choose photos <input id="manual-photo-files" type="file" accept="image/jpeg,image/png,image/webp,image/*" multiple></label>'+
+    '<label style="display:block;margin-top:10px">Photo type <select id="manual-photo-kind"><option value="real">My warehouse/product photo</option><option value="manufacturer">Product image I found online</option></select></label>'+
+    '<label style="display:block;margin-top:10px">Image source URL (optional) <input id="manual-photo-source" type="url" placeholder="https://..."></label>'+
+    '<button type="button" id="manual-photo-add" class="primary" style="margin-top:12px">Add selected photos</button>'+
+    '<p id="manual-photo-status" role="status"></p>';
+  get("reference-gallery").after(photoPanel);
+  let pendingReference=null;
+  const filePicker=get("manual-photo-files");
+  filePicker.addEventListener("change",()=>{pendingReference=null;});
+  const addButton=get("manual-photo-add");
+  const status=get("manual-photo-status");
+  resetManualPhoto=()=>{pendingReference=null;filePicker.value="";get("manual-photo-kind").value="real";get("manual-photo-source").value="";status.textContent="";};
+  async function prepareManualPhoto(file) {
+    const decoded=await createImageBitmap(file);
+    try {
+      const canvas=document.createElement("canvas");
+      canvas.width=canvas.height=1000;
+      const ctx=canvas.getContext("2d");
+      ctx.fillStyle="#ffffff";ctx.fillRect(0,0,1000,1000);
+      const scale=Math.min(1000/decoded.width,1000/decoded.height);
+      const w=Math.round(decoded.width*scale),h=Math.round(decoded.height*scale);
+      ctx.drawImage(decoded,Math.floor((1000-w)/2),Math.floor((1000-h)/2),w,h);
+      const blob=await new Promise((resolve,reject)=>
+        canvas.toBlob(value=>value?resolve(value):reject(Error("Unable to convert photo")),"image/jpeg",0.91));
+      const buffer=await blob.arrayBuffer();
+      const sha=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",buffer)),
+        byte=>byte.toString(16).padStart(2,"0")).join("");
+      return {blob,sha,bytes:blob.size,width:1000,height:1000,name:file.name};
+    } finally { decoded.close(); }
+  }
+  useSavedReference=async(item,ref,button)=>{
+    if(current!==item)return;
+    if(addingPhotos)return;
+    setAddingPhotos(true);button.disabled=true;
+    try {
+      if(Object.keys(patch()).length||inlinePhotoPendingChanges())throw Error("Save your listing and photo changes first.");
+      const signed=await request("/functions/v1/studio-api/reference/"+encodeURIComponent(item.id)+"/"+encodeURIComponent(ref.id));
+      const result=await fetch(signed.url,{cache:"no-store"});
+      if(!result.ok)throw Error("Saved photo could not be downloaded. Refresh photos and retry.");
+      const photo=await result.blob(),dt=new DataTransfer();dt.items.add(new File([photo],ref.id+".jpg",{type:photo.type||"image/jpeg"}));
+      pendingReference=ref.id;filePicker.files=dt.files;get("manual-photo-kind").value="manufacturer";get("manual-photo-source").value=ref.source_url||"";
+      await addButton.onclick();
     }catch(error){status.textContent=error.message;}
-    finally{savingPhotos=false;if(current===savingItem)draw();}
+    finally{setAddingPhotos(false);button.disabled=false;}
+  };
+  // Refresh references after photo additions, without altering seller-controlled order.
+  addButton.onclick=async()=>{
+    const item=current;
+    if(!item || !get("editor").open) return;
+    if(Object.keys(patch()).length || inlinePhotoPendingChanges()){
+      status.textContent="Save listing and photo-order changes before adding new pictures.";return;
+    }
+    const files=[...filePicker.files];
+    if(!files.length){status.textContent="Select one or more picture files first.";return;}
+    if(files.length>10){status.textContent="Choose up to ten photos at once.";return;}
+    if(files.some(file=>file.size>16000000)){
+      status.textContent="Each photo must be smaller than 16 MB.";return;
+    }
+    setAddingPhotos(true);addButton.disabled=true;filePicker.disabled=true;
+    let added=0;
+    try{
+      const response=await rpc("studio_photo_choices",{p_item:item.id});
+      let revision=response.revision;
+      if(response.selected.length+files.length>10)
+        throw Error("You have "+response.selected.length+" selected photos. Remove some first to stay within 10.");
+      const authenticated=await auth.getSession();
+      if(authenticated.error || !authenticated.data.session)throw Error("Sign in again to add photos.");
+      const active=authenticated.data.session;
+      for(const [idx,file] of files.entries()){
+        status.textContent="Preparing photo "+(idx+1)+" of "+files.length+"…";
+        const image=await prepareManualPhoto(file);
+        const batch=crypto.randomUUID();
+        const originalBytes=await file.arrayBuffer();
+        const originalSha=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",originalBytes)),v=>v.toString(16).padStart(2,"0")).join("");
+        const originalUpload=await fetch(backend+"/storage/v1/object/studio-originals/incoming/"+active.user.id+"/"+batch+"/"+originalSha,{
+          method:"POST",headers:{apikey:publicKey,Authorization:"Bearer "+active.access_token,"Content-Type":file.type||"application/octet-stream","x-upsert":"false"},body:file
+        });
+        if(!originalUpload.ok)throw Error("Original photo could not be saved. Nothing was added to the listing.");
+        const path="incoming/"+active.user.id+"/"+batch+"/"+image.sha;
+        const uploaded=originalSha===image.sha ? originalUpload : await fetch(backend+"/storage/v1/object/studio-originals/"+path,{
+          method:"POST",headers:{apikey:publicKey,Authorization:"Bearer "+active.access_token,
+            "Content-Type":"image/jpeg","x-upsert":"false"},body:image.blob
+        });
+        if(!uploaded.ok){
+          const details=await uploaded.text().catch(()=>uploaded.statusText);
+          throw Error("Photo upload failed: "+details.slice(0,180));
+        }
+        status.textContent="Adding photo "+(idx+1)+" of "+files.length+" to this listing…";
+        const saved=await request("/functions/v1/studio-api/add-photo",{
+          method:"POST",body:JSON.stringify({
+            id:item.id,batch,sha:image.sha,bytes:image.bytes,width:image.width,
+            height:image.height,name:image.name,photo_revision:revision,
+            kind:get("manual-photo-kind").value,
+            source_url:get("manual-photo-source").value.trim(),
+            original:{sha:originalSha,bytes:originalBytes.byteLength},...(pendingReference?{reference_id:pendingReference}:{})
+          })
+        });
+        if(!saved.ok)throw Error("Photo addition failed");
+        revision=saved.photo_revision;
+        added++;
+      }
+      filePicker.value="";pendingReference=null;
+      await refresh();
+      const updated=items.find(product=>product.id===item.id);
+      if(updated)openItem(updated);
+      get("editor-status").textContent="Added "+added+" photo"+(added===1?"":"s")+". Existing cover and listing text preserved.";
+      status.textContent="Added "+added+" photo"+(added===1?"":"s")+". Choose Make cover or rearrange photos above.";
+    }catch(error){
+      status.textContent=(added?added+" added. ":"")+(error.message||"Unable to add photos.")+
+        (added?" Refresh this product to see the saved additions.":"");
+    }finally{setAddingPhotos(false);addButton.disabled=false;filePicker.disabled=false;}
   };
 }
+
+get("category-filter").onchange=render;
+get("layout-toggle").onclick=()=>{layout=layout==="queue"?"grid":"queue";get("layout-toggle").textContent=layout==="queue"?"Photo grid":"Work queue";render();};
+get("select-visible").onchange=event=>{for(const item of filtered())event.target.checked?selectedItems.add(item.id):selectedItems.delete(item.id);render();};
+get("clear-selection").onclick=()=>{selectedItems.clear();render();};
+get("bulk-review").onclick=()=>{const item=items.find(i=>selectedItems.has(i.id));if(item){bulkMode=true;openItem(item);}};
+let bulkBusy=false;
+async function runBulk(label,operation){
+  if(bulkBusy)return;
+  const batch=items.filter(i=>selectedItems.has(i.id));
+  if(!batch.length)return;
+  bulkBusy=true;const buttons=[...get("bulk-bar").querySelectorAll("button")];buttons.forEach(b=>b.disabled=true);
+  try {
+    const results=await studioWorkflows.run(batch,operation,(n,total)=>notice(label+" "+n+" / "+total+"…"));
+    await refresh();const failed=results.filter(r=>!r.ok);
+    notice(label+": "+(results.length-failed.length)+" completed; "+failed.length+" need attention."+(failed.length?" "+failed.map(r=>(items.find(i=>i.id===r.id)?title(items.find(i=>i.id===r.id)):r.id)+": "+r.error).join(" | "):""));
+    return results;
+  } finally {bulkBusy=false;buttons.forEach(b=>b.disabled=false);}
+}
+get("bulk-price").onclick=()=>runBulk("Fill missing prices",async item=>{
+  if(Object.hasOwn(item.fields,"price"))throw Error("Existing price or explicit blank preserved.");
+  const suggestion=studioWorkflows.suggestedPrice(item);
+  if(!suggestion)throw Error("No dated retail price and source are saved.");
+  return rpc("studio_seller_patch",{p_id:item.id,p_expected_revision:item.revision,p_patch:{price:String(suggestion.price)}});
+});
+get("bulk-prepare").onclick=()=>runBulk("Prepare galleries",async item=>{
+  const state=await rpc("studio_render_status",{p_item:item.id});
+  if(state.state==="ready")return "Already prepared";
+  if(!item.photo_selection?.length)throw Error("Choose a reference or add a listing photo first.");
+  if(state.state==="failed")return rpc("studio_retry_render",{p_item:item.id,p_revision:item.revision,p_photo_revision:state.photo_revision,p_failed_job:state.retry_job});
+  return rpc("studio_request_render",{p_item:item.id,p_revision:item.revision,p_photo_revision:state.photo_revision});
+});
+get("bulk-copy").onclick=()=>runBulk("Refresh copy suggestions",item=>rpc("studio_refresh_copy_suggestion",{p_item:item.id,p_revision:item.revision}));
+get("bulk-approve").onclick=()=>runBulk("Approve selected",async item=>{
+  if(!["review","approved"].includes(item.status))throw Error("This listing is not in the review queue.");
+  if(needsRepair(item))throw Error("Prepare the selected photos first.");
+  // Owner clicked Approve selected. Defaults may be saved, but explicit seller values are never replaced.
+  if(!item.fields.condition && item.field_sources?.condition!=="seller"){
+    const changed=await rpc("studio_seller_patch",{p_id:item.id,p_expected_revision:item.revision,p_patch:{condition:"New"}});
+    Object.assign(item,{fields:changed.fields,revision:changed.revision});
+  }
+  const response=await request("/functions/v1/studio-api/export-preview",{method:"POST",body:JSON.stringify({id:item.id,revision:item.revision})});
+  if(response.snapshot.id!==item.id||response.snapshot.revision!==item.revision)throw Error("Listing changed; reopen it.");
+  await studioWorkflows.verifyPhotos(response);
+  return rpc("studio_approve_export",{p_item:item.id,p_revision:item.revision,p_snapshot:response.snapshot});
+});
+get("bulk-export").onclick=async()=>{
+  const entries=[];let totalBytes=0;
+  await runBulk("Export approved listings",async item=>{
+    if(item.status!=="approved")throw Error("Approve this listing first.");
+    const response=await request("/functions/v1/studio-api/export-preview",{method:"POST",body:JSON.stringify({id:item.id,revision:item.revision})});
+    if(response.snapshot.id!==item.id||response.snapshot.revision!==item.revision)throw Error("Listing changed; reopen it.");
+    const photos=await studioWorkflows.verifyPhotos(response);const bytes=photos.reduce((n,p)=>n+p.length,0);
+    if(totalBytes+bytes>250*1024*1024)throw Error("Batch exceeds 250 MB. Download this product in a smaller batch.");
+    // Recheck approval after downloads so stale exports do not masquerade as approved.
+    const latest=(await rpc("studio_state")).find(i=>i.id===item.id);
+    if(!latest||latest.status!=="approved"||latest.revision!==item.revision||JSON.stringify(latest.photo_selection)!==JSON.stringify(item.photo_selection))throw Error("Listing changed during export. Retry it.");
+    const folder=item.id.replace(/[^a-zA-Z0-9_-]/g,"_")+"/";
+    entries.push({name:folder+"listing.json",data:JSON.stringify(response.snapshot,null,2)});
+    photos.forEach((data,n)=>entries.push({name:folder+String(n+1).padStart(2,"0")+".jpg",data}));totalBytes+=bytes;
+  });
+  if(entries.length){const url=URL.createObjectURL(studioWorkflows.zip(entries)),a=document.createElement("a");a.href=url;a.download="CrazyMoe-approved-listings.zip";a.click();setTimeout(()=>URL.revokeObjectURL(url),60000);}
+};
+get("refresh-copy").onclick=async()=>{
+  const item=current;get("refresh-copy").disabled=true;
+  try{const result=await rpc("studio_refresh_copy_suggestion",{p_item:item.id,p_revision:item.revision});if(current===item){get("suggested-description").value=result.description;get("use-copy").disabled=false;get("editor-status").textContent="Suggestion refreshed. Your saved description is unchanged.";}}
+  catch(error){get("editor-status").textContent=error.message;}
+  finally{get("refresh-copy").disabled=false;}
+};
+get("use-copy").onclick=()=>{form.elements.description.value=get("suggested-description").value;form.dispatchEvent(new Event("input"));};
+form.addEventListener("input",()=>{get("editor-status").textContent=Object.keys(patch()).length?"Unsaved changes":"Saved · revision "+current.revision;});
+document.addEventListener("keydown",event=>{
+  if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="s"&&get("editor").open){event.preventDefault();save(false);}
+  if(event.target.matches("input,textarea,select")||event.ctrlKey||event.metaKey||event.altKey)return;
+  if(event.key==="/"&&!get("editor").open){event.preventDefault();get("search").focus();}
+  if(event.key.toLowerCase()==="j"&&get("editor").open&&canLeave())next(current.id);
+});
