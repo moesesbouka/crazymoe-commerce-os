@@ -1,0 +1,24 @@
+begin;
+do $$declare actor uuid; a record; probe jsonb; original jsonb; captured jsonb; res jsonb; absent jsonb; begin
+select user_id into strict actor from studio_core.members where enabled limit 1;
+select * into strict a from public.active_listings order by id limit 1;
+original:=to_jsonb(a);
+select to_jsonb(t) into absent from public.active_listings t where id<>a.id order by id limit 1;
+probe:=jsonb_build_object('account_tag',a.account_tag,'facebook_id',a.facebook_id,'title','rollback canary','is_active',false,'is_published',true);
+begin perform public.studio_sync_observations(a.account_tag,'full',jsonb_build_array(probe)); raise exception 'nonmember accepted'; exception when insufficient_privilege then null;end;
+perform set_config('request.jwt.claim.sub',actor::text,true);
+res:=public.studio_sync_observations(a.account_tag,'full',jsonb_build_array(probe));
+if res->>'matched'<>'1' then raise exception 'match failed';end if;
+select to_jsonb(t) into captured from public.active_listings t where id=a.id;
+if (original-'last_seen_at'-'updated_at') is distinct from (captured-'last_seen_at'-'updated_at') then raise exception 'seller/public fields changed';end if;
+perform public.studio_sync_observations(a.account_tag,'full',jsonb_build_array(probe));
+if (select count(*) from studio_core.facebook_observations where facebook_id=a.facebook_id and account_tag=a.account_tag)<>1 then raise exception 'duplicate'; end if;
+if absent is distinct from (select to_jsonb(t) from public.active_listings t where id=(absent->>'id')::bigint) then raise exception 'unseen row changed';end if;
+probe:=probe||'{"facebook_id":"9999999999999999999"}';
+if exists(select 1 from public.active_listings where facebook_id=probe->>'facebook_id') then raise exception 'fixture collision';end if;
+begin perform public.studio_sync_observations(a.account_tag,'full',jsonb_build_array(probe,probe||'{"facebook_id":"bad"}'));raise exception 'invalid batch accepted';exception when raise_exception then if sqlerrm<>'Invalid listing or account' then raise; end if;end;
+if exists(select 1 from studio_core.facebook_observations where facebook_id=probe->>'facebook_id') then raise exception 'partial write';end if;
+res:=public.studio_sync_observations(a.account_tag,'new_only',jsonb_build_array(probe));
+if res->>'pending'<>'1' or exists(select 1 from public.active_listings where facebook_id=probe->>'facebook_id') then raise exception 'unsafe insert';end if;
+end$$;
+rollback;
