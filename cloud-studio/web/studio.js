@@ -256,7 +256,10 @@ function openItem(item) {
     const input = form.elements[key], value = editorValue(item,key);
     if (key === "condition" && value && !Array.from(input.options).some(option => option.value === value)) input.add(new Option(value,value));
     input.value = value;
-    input.dataset.initial = String(item.fields[key] ?? "");
+    // Displayed defaults are not unsaved seller keystrokes. Keep the saved
+    // value separately so Save can persist them without blocking photo edits.
+    input.dataset.initial = value;
+    input.dataset.saved = String(item.fields[key] ?? "");
   }
   get("diagnostics").textContent = statusLabel[item.status] + " · Revision " + item.revision;
   renderCatalogEvidence(item);
@@ -362,8 +365,9 @@ function monitorRender(item) {
     }
   });
 }
-function patch() {
-  return Object.fromEntries(fields.filter(key => form.elements[key].value !== form.elements[key].dataset.initial)
+function patch(includePrefills = false) {
+  return Object.fromEntries(fields.filter(key =>
+    form.elements[key].value !== form.elements[key].dataset[includePrefills ? "saved" : "initial"])
     .map(key => [key,form.elements[key].value]));
 }
 function canLeave() { return !saving && (!Object.keys(patch()).length || confirm("Discard your unsaved changes?")); }
@@ -373,7 +377,7 @@ function next(id) {
 }
 async function save(advance) {
   if (saving) return false;
-  const item = current, changes = patch();
+  const item = current, changes = patch(true);
   saving = true;
   const controls = Array.from(form.elements), disabled = controls.map(input => input.disabled);
   controls.forEach(input => {input.disabled=true;});
