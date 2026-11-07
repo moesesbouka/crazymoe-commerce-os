@@ -1,3 +1,7 @@
+# Current implementation
+
+See [OVERHAUL.md](OVERHAUL.md) for the current architecture, mutation boundaries, tests and remaining acceptance gaps. The following is the historical migration log; its checkpoint statements describe earlier releases.
+
 # Existing Studio cloud migration
 
 This directory extends the existing CrazyMoe Commerce OS project. It is not a
