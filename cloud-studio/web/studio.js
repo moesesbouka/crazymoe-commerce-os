@@ -376,7 +376,7 @@ function next(id) {
   const list = filtered(), index = list.findIndex(item => item.id === id);
   if (index >= 0 && list[index + 1]) openItem(list[index + 1]); else get("editor").close();
 }
-async function save(advance) {
+async function save(advance, propagate = false) {
   if (saving) return false;
   const item = current, changes = patch(true);
   saving = true;
@@ -389,7 +389,11 @@ async function save(advance) {
     }
     render(); if (advance) next(item.id); else {openItem(item); get("editor-status").textContent = "Saved.";}
     return true;
-  } catch(error) {get("editor-status").textContent = error.message; return false;}
+  } catch(error) {
+    get("editor-status").textContent = error.message;
+    if (propagate) throw error;
+    return false;
+  }
   finally { controls.forEach((input,index) => {input.disabled=disabled[index];}); saving = false; }
 }
 form.onsubmit = event => {event.preventDefault(); save(false);};
@@ -452,7 +456,7 @@ get("review-export").onclick = async () => {
   button.disabled = true;
   button.textContent = "Verifying listing…";
   try {
-    if (Object.keys(patch(true)).length && !await save(false)) throw Error("Save your listing changes before approval.");
+    if (Object.keys(patch(true)).length) await save(false, true);
     if (current.id !== item.id) throw Error("Product changed; reopen it before approving.");
     // Server checks seller membership, identity, warehouse cover, and stale revisions.
     const response = await request("/functions/v1/studio-api/export-preview", {
