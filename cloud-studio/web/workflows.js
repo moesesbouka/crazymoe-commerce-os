@@ -1,6 +1,26 @@
 "use strict";
 // Shared by individual approval and explicit owner-selected bulk operations.
 globalThis.studioWorkflows = {
+  editorValue(item, key) {
+    if (key === "condition" && !String(item.fields[key] ?? "").trim() && item.field_sources?.condition !== "seller") return "New";
+    if (Object.hasOwn(item.fields, key)) return String(item.fields[key] ?? "");
+    if (key === "condition") return "New";
+    if (["title", "model", "price", "description", "source_url"].includes(key))
+      return String(item.generated_candidate?.[key] ?? "");
+    return "";
+  },
+  prefillPatch(item, keys) {
+    return Object.fromEntries(keys.map(key=>[key,this.editorValue(item,key)])
+      .filter(([key,value])=>value!==String(item.fields[key] ?? "")));
+  },
+  validateListing(fields) {
+    const missing=[];
+    if(!String(fields.title ?? "").trim())missing.push("title");
+    if(!String(fields.description ?? "").trim())missing.push("description");
+    if(!["New","Used - Like New","Used - Good","Used - Fair","For parts or not working"].includes(fields.condition))missing.push("condition");
+    if(!/^[0-9]{1,12}(\.[0-9]{1,2})?$/.test(String(fields.price ?? "")) || Number(fields.price)<=0)missing.push("positive price");
+    if(missing.length)throw Error("Complete before approving: "+missing.join(", ")+".");
+  },
   async verifyPhotos(response, fetchFile = fetch) {
     const snapshot=response?.snapshot;
     if(!snapshot || !Array.isArray(snapshot.images) || !snapshot.images.length || snapshot.images.length>10 || response.urls?.length!==snapshot.images.length)

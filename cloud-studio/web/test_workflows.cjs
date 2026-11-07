@@ -23,3 +23,11 @@ test('standard ZIP preserves ordered private JPEGs and listing metadata',async()
  const result=require('node:child_process').spawnSync('python',['-c','import sys,io,zipfile; z=zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read())); assert z.namelist()==["item/listing.json","item/01.jpg"]; assert z.testzip() is None; assert z.read("item/01.jpg")==bytes([255,216,255])'],{input:bytes});
  assert.equal(result.status,0,result.stderr.toString());
 });
+test('bulk approval saves displayed prefills without replacing seller edits or explicit blanks',()=>{
+ const item={fields:{description:'Seller wording',price:'45',condition:''},field_sources:{condition:'legacy_preserved_unknown'},generated_candidate:{title:'Suggested title',description:'Different suggestion',price:'99',model:'M1'}};
+ assert.deepEqual(flow.prefillPatch(item,['title','description','price','condition','model']),{title:'Suggested title',condition:'New',model:'M1'});
+ const cleared={...item,fields:{...item.fields,title:'',price:''},field_sources:{condition:'seller'}};
+ assert.deepEqual(flow.prefillPatch(cleared,['title','description','price','condition']),{});
+ assert.throws(()=>flow.validateListing(cleared.fields),/title, condition, positive price/);
+ flow.validateListing({...item.fields,...flow.prefillPatch(item,['title','condition'])});
+});

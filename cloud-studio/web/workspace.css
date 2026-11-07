@@ -11,3 +11,6 @@ main{margin-left:220px;padding:32px 36px;max-width:1800px}main header{display:fl
 #editor #photo-editor{max-width:none;max-height:none;overflow:visible}
 
 .bulk-bar{display:flex;flex-wrap:wrap}.copy-suggestions{background:#f8fafb;border:1px solid var(--line);padding:12px;border-radius:9px;margin:14px 0;font-size:12px}.copy-suggestions summary{cursor:pointer;font-weight:650}.copy-suggestions textarea{width:100%;box-sizing:border-box}.copy-suggestions button{padding:9px;font-size:12px}.diagnostics details{font-size:11px;margin-top:10px;color:#687e8e}.diagnostics details p{line-height:1.5}#message{overflow-wrap:anywhere}
+
+.review-progress{margin:8px 0 0;color:#9f481d;font-size:13px;font-weight:650}.bulk-results{display:grid;gap:8px;margin:0 0 20px}.bulk-result{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 16px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:13px}.bulk-result strong{flex:1 1 230px}.bulk-result span{flex:1 1 230px}.bulk-result.failure{border-left:4px solid #bd572e}.bulk-result.success{border-left:4px solid #298660}
+@media(max-width:760px){#editor footer{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}#editor footer>div{display:contents}#editor #skip{display:block}#editor footer button{min-width:0;width:100%}}

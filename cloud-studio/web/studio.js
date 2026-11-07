@@ -46,12 +46,7 @@ async function connectStudioExtension(){
 // Missing migrated fields may use prepared suggestions; explicit seller values,
 // including empty strings, always win. Suggestions are persisted before review.
 function editorValue(item, key) {
-  if (key === "condition" && !String(item.fields[key] ?? "").trim() && item.field_sources?.condition !== "seller") return "New";
-  if (Object.hasOwn(item.fields, key)) return String(item.fields[key] ?? "");
-  if (key === "condition") return "New";
-  if (["title", "model", "price", "description", "source_url"].includes(key))
-    return String(item.generated_candidate?.[key] ?? "");
-  return "";
+  return studioWorkflows.editorValue(item,key);
 }
 const title = item => editorValue(item, "title") || item.id;
 function category(item){
@@ -146,7 +141,7 @@ function render() {
     status.textContent=needsRepair(item)?"Photos need attention":statusLabel[item.status];
     const photos=document.createElement("small");photos.textContent=(item.photo_selection?.length||0)+" selected"+(item.media_health?.references?" · "+item.media_health.references+" references":"");
     details.append(price,status,photos);
-    card.append(productCover(item,card),body,details);card.onclick=()=>openItem(item);
+    card.append(productCover(item,card),body,details);card.onclick=()=>startReview(filtered(),false,item.id);
     wrap.append(check,card);return wrap;
   }));
   if(!visible.length){const empty=document.createElement("p");empty.className="empty";empty.textContent="No products match these filters.";get("cards").append(empty);}
@@ -270,7 +265,23 @@ async function preview(photo, referenceOnly=false) {
 let inlinePhotoLoader = () => {};
 let inlinePhotoPendingChanges = () => false;
 let inlinePhotoSave = async () => {};
-let bulkMode = false;
+let reviewQueue = null, renderReady = false;
+function startReview(batch, selected = false, firstId = batch[0]?.id) {
+  if(!batch.length)return;
+  reviewQueue={ids:batch.map(item=>item.id),selected,approved:0};
+  openItem(batch.find(item=>item.id===firstId)||batch[0]);
+}
+function updateReviewNavigation() {
+  const index=reviewQueue?.ids.indexOf(current?.id) ?? -1;
+  const progress=get("review-progress");
+  progress.hidden=!reviewQueue?.selected;
+  progress.textContent=reviewQueue?.selected?"Selected item "+(index+1)+" of "+reviewQueue.ids.length:"";
+  const more=reviewQueue?.ids.slice(index+1).some(id=>items.some(item=>item.id===id));
+  get("skip").textContent=more?"Skip to next":"Finish review";
+  get("save-next").textContent=more?"Save & next →":"Save & finish";
+  if(!approvalBusy)get("review-export").textContent=reviewQueue?.selected?(more?"Approve & next →":"Approve & finish"):"Approve listing";
+  get("review-export").disabled=!renderReady||approvalBusy||saving||addingPhotos;
+}
 let stopRenderStatus = () => {};
 function renderCatalogEvidence(item) {
   const list = get("catalog-evidence-list");
@@ -298,6 +309,8 @@ function openItem(item) {
   stopRenderStatus();
   resetManualPhoto();
   current = item;
+  renderReady = false;
+  updateReviewNavigation();
   get("transfer-export").hidden = item.status !== "approved";
   get("edit-title").textContent = title(item);
   get("editor-status").textContent = "Saved · revision " + item.revision;
@@ -378,13 +391,13 @@ get("record-catalog-evidence").onclick=async()=>{
 function monitorRender(item) {
   stopRenderStatus();
   get("retry-render").hidden = true;
-  get("review-export").disabled = true;
+  renderReady=false;get("review-export").disabled = true;
   get("render-status").textContent = "Checking listing photos…";
   stopRenderStatus = studioRenderStatus.watch({
     read:()=>rpc("studio_render_status",{p_item:item.id}), revision:item.revision,
     active:()=>get("editor").open && current===item,
     show:(message,ready,value)=>{
-      get("render-status").textContent=message;get("review-export").disabled=!ready;
+      renderReady=ready;get("render-status").textContent=message;updateReviewNavigation();
       const button=get("retry-render");button.hidden=!value?.retry_job;button.disabled=false;
       button.onclick=async()=>{
         if(Object.keys(patch()).length){get("editor-status").textContent="Save your changes before retrying photo preparation.";return;}
@@ -404,8 +417,14 @@ function patch(includePrefills = false) {
 }
 function canLeave() { return !saving && !approvalBusy && !addingPhotos && (!(Object.keys(patch()).length || inlinePhotoPendingChanges()) || confirm("Discard your unsaved listing and photo changes?")); }
 function next(id) {
-  const list = bulkMode ? filtered().filter(i=>selectedItems.has(i.id)) : filtered(), index = list.findIndex(item => item.id === id);
-  if (index >= 0 && list[index + 1]) openItem(list[index + 1]); else get("editor").close();
+  const ids=reviewQueue?.ids || filtered().map(item=>item.id),index=ids.indexOf(id);
+  const following=index<0?null:ids.slice(index+1).map(key=>items.find(item=>item.id===key)).find(Boolean);
+  if(following)openItem(following);
+  else {
+    if(reviewQueue?.selected)notice("Selected review finished. "+reviewQueue.approved+" approved; "+reviewQueue.ids.filter(key=>selectedItems.has(key)&&items.some(item=>item.id===key)).length+" still selected for review.");
+    get("editor").close();
+    reviewQueue=null;
+  }
 }
 async function save(advance, propagate = false) {
   if(addingPhotos){get("editor-status").textContent="Wait for photo upload to finish.";return;}
@@ -427,13 +446,14 @@ async function save(advance, propagate = false) {
     if (propagate) throw error;
     return false;
   }
-  finally { controls.forEach((input,index) => {input.disabled=disabled[index];}); saving = false; }
+  finally { controls.forEach((input,index) => {input.disabled=disabled[index];}); saving = false; updateReviewNavigation(); }
 }
 form.onsubmit = event => {event.preventDefault(); save(false);};
 get("save-next").onclick = () => save(true);
 get("skip").onclick = () => {if(canLeave()) next(current.id);};
 get("close").onclick = () => {if(canLeave()) get("editor").close();};
 get("editor").oncancel = event => {if(!canLeave()) event.preventDefault();};
+get("editor").onclose=()=>{if(get("editor").open)return;stopRenderStatus();++photoRequest;reviewQueue=null;};
 let uploadBatch;
 get("files").onchange = () => {uploadBatch = crypto.randomUUID();};
 if (location.pathname.startsWith("/app")) get("upload").open = true;
@@ -478,7 +498,7 @@ get("upload-form").onsubmit = async event => {
     picker.value = ""; sessionStorage.removeItem(uploadKey); uploadBatch = null;
     await refresh();
     const item = items.find(product => product.id===completed.id);
-    if (item) openItem(item);
+    if (item) startReview([item]);
   } catch(error) { message.textContent = error.message; }
   finally { button.disabled = picker.disabled = false; }
 };
@@ -505,21 +525,26 @@ get("review-export").onclick = async () => {
         snapshot.images.length > 10 || response.urls?.length !== snapshot.images.length) {
       throw Error("The saved listing or photo set is incomplete.");
     }
+    studioWorkflows.validateListing(snapshot);
     await studioWorkflows.verifyPhotos(response);
     button.textContent = "Approving…";
     await rpc("studio_approve_export",{
       p_item:snapshot.id,p_revision:snapshot.revision,p_snapshot:snapshot
     });
-    await refresh();
-    const updated = items.find(product=>product.id===item.id);
-    if (updated) openItem(updated);
-    message.textContent = "Approved — ready for Facebook handoff.";
+    item.status="approved";
+    if(reviewQueue?.selected){reviewQueue.approved++;selectedItems.delete(item.id);}
+    try{await refresh();}catch(error){render();notice("Approval saved. Inventory refresh failed: "+error.message);}
+    if(reviewQueue?.selected)next(item.id);
+    else {
+      const updated = items.find(product=>product.id===item.id);
+      if (updated) openItem(updated);
+      message.textContent = "Approved — ready for Facebook handoff.";
+    }
   } catch(error) {
     get("editor-status").textContent = error.message || "Unable to approve listing.";
   } finally {
     approvalBusy = false;
-    button.disabled = false;
-    button.textContent = "Approve listing";
+    updateReviewNavigation();
   }
 };
 get("transfer-export").onclick=async ()=>{
@@ -802,19 +827,33 @@ get("category-filter").onchange=render;
 get("layout-toggle").onclick=()=>{layout=layout==="queue"?"grid":"queue";get("layout-toggle").textContent=layout==="queue"?"Photo grid":"Work queue";render();};
 get("select-visible").onchange=event=>{for(const item of filtered())event.target.checked?selectedItems.add(item.id):selectedItems.delete(item.id);render();};
 get("clear-selection").onclick=()=>{selectedItems.clear();render();};
-get("bulk-review").onclick=()=>{const item=items.find(i=>selectedItems.has(i.id));if(item){bulkMode=true;openItem(item);}};
+get("bulk-review").onclick=()=>startReview(items.filter(item=>selectedItems.has(item.id)),true);
 let bulkBusy=false;
 async function runBulk(label,operation){
   if(bulkBusy)return;
   const batch=items.filter(i=>selectedItems.has(i.id));
   if(!batch.length)return;
   bulkBusy=true;const buttons=[...get("bulk-bar").querySelectorAll("button")];buttons.forEach(b=>b.disabled=true);
+  get("bulk-results").hidden=true;
+  notice(label+"…");get("message").scrollIntoView({block:"nearest"});
   try {
     const results=await studioWorkflows.run(batch,operation,(n,total)=>notice(label+" "+n+" / "+total+"…"));
-    await refresh();const failed=results.filter(r=>!r.ok);
-    notice(label+": "+(results.length-failed.length)+" completed; "+failed.length+" need attention."+(failed.length?" "+failed.map(r=>(items.find(i=>i.id===r.id)?title(items.find(i=>i.id===r.id)):r.id)+": "+r.error).join(" | "):""));
+    const failed=results.filter(r=>!r.ok);
+    let refreshError="";
+    try{await refresh();}catch(error){refreshError=" Inventory refresh failed: "+error.message;}
+    notice(label+": "+(results.length-failed.length)+" completed; "+failed.length+" need attention."+refreshError);
+    get("bulk-results").replaceChildren(...results.map(result=>{
+      const row=document.createElement("div"),name=document.createElement("strong"),status=document.createElement("span");
+      const item=items.find(i=>i.id===result.id)||batch.find(i=>i.id===result.id);
+      row.className="bulk-result "+(result.ok?"success":"failure");name.textContent=title(item);
+      status.textContent=result.ok?"Completed":result.error;row.append(name,status);
+      if(!result.ok){const review=document.createElement("button");review.className="secondary";review.textContent="Review item";review.onclick=()=>startReview([items.find(i=>i.id===result.id)||item]);row.append(review);}
+      return row;
+    }));
+    get("bulk-results").hidden=false;
     return results;
-  } finally {bulkBusy=false;buttons.forEach(b=>b.disabled=false);}
+  } catch(error) {notice(label+" failed: "+error.message);return [];}
+  finally {bulkBusy=false;buttons.forEach(b=>b.disabled=false);}
 }
 get("bulk-price").onclick=()=>runBulk("Fill missing prices",async item=>{
   if(Object.hasOwn(item.fields,"price"))throw Error("Existing price or explicit blank preserved.");
@@ -833,15 +872,21 @@ get("bulk-copy").onclick=()=>runBulk("Refresh copy suggestions",item=>rpc("studi
 get("bulk-approve").onclick=()=>runBulk("Approve selected",async item=>{
   if(!["review","approved"].includes(item.status))throw Error("This listing is not in the review queue.");
   if(needsRepair(item))throw Error("Prepare the selected photos first.");
-  // Owner clicked Approve selected. Defaults may be saved, but explicit seller values are never replaced.
-  if(!item.fields.condition && item.field_sources?.condition!=="seller"){
-    const changed=await rpc("studio_seller_patch",{p_id:item.id,p_expected_revision:item.revision,p_patch:{condition:"New"}});
-    Object.assign(item,{fields:changed.fields,revision:changed.revision});
+  // Save exactly the same displayed prefills as individual approval.
+  // Explicit seller values (including cleared fields) always take precedence.
+  const changes=studioWorkflows.prefillPatch(item,fields);
+  studioWorkflows.validateListing({...item.fields,...changes});
+  if(Object.keys(changes).length){
+    const changed=await rpc("studio_seller_patch",{p_id:item.id,p_expected_revision:item.revision,p_patch:changes});
+    Object.assign(item,{fields:changed.fields,revision:changed.revision,status:changed.status||"review"});
   }
   const response=await request("/functions/v1/studio-api/export-preview",{method:"POST",body:JSON.stringify({id:item.id,revision:item.revision})});
   if(response.snapshot.id!==item.id||response.snapshot.revision!==item.revision)throw Error("Listing changed; reopen it.");
+  studioWorkflows.validateListing(response.snapshot);
   await studioWorkflows.verifyPhotos(response);
-  return rpc("studio_approve_export",{p_item:item.id,p_revision:item.revision,p_snapshot:response.snapshot});
+  const result=await rpc("studio_approve_export",{p_item:item.id,p_revision:item.revision,p_snapshot:response.snapshot});
+  item.status="approved";
+  return result;
 });
 get("bulk-export").onclick=async()=>{
   const entries=[];let totalBytes=0;

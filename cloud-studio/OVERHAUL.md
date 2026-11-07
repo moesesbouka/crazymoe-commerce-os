@@ -93,3 +93,23 @@ seller data only through versioned recovery; do not replace the database blindly
   photo grouping remain evidence-dependent workflows.
 - Missing actual product photographs cannot be replaced with a mismatched model
   image. Such products stay visibly in Photo repairs.
+
+## Bulk approval and selected-review repair — November 7, 2026
+
+Bulk approval now persists the same displayed prefills as the individual editor.
+Saved seller fields and explicit blanks take precedence. Production inspection
+found 23 review items showing unsaved candidate titles and 5 showing unsaved
+candidate descriptions; the old bulk action only persisted the New condition.
+Each operation now reports a result per item and continues after individual
+failures. Photo hashes, positive-price checks and server revision checks remain.
+
+Review selected snapshots item IDs independently of the current filter. Approve
+advances to the next selected item and only closes after the last one. A visible
+item counter, Save & next, Skip and close/Escape reset were verified, including
+mobile controls. Failed approvals keep the item open; skipped items stay selected.
+
+Regression command: `python cloud-studio/web/test_bulk_review.py`. Strict isolated
+Chromium tests passed at 1366x768 and 390x844, along with the existing workspace
+suite. A rolled-back production database test confirmed two affected listings
+can approve after matching prefills while preserving their prices/descriptions.
+No live listings were left approved by these tests.
