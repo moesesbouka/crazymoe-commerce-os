@@ -136,6 +136,13 @@ def save_fields(db, group_id, updates, *, effective_fields=None, source,
         accepted, blocked = {}, []
         at = dt.datetime.now(dt.timezone.utc).isoformat()
         for field, value in updates.items():
+            if not seller_action or source == "retailer_import":
+                if field in ("notes","condition"):
+                    blocked.append(field)
+                    continue
+                if field in ("title","description"):
+                    from listing_public_copy import clean
+                    value = clean(value,field)
             owned = metadata.get(field, (False, ""))[0]
             # An explicit seller clear is protected, including from fill-missing jobs.
             if owned and not seller_action:

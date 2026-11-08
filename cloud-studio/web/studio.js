@@ -329,23 +329,14 @@ function openItem(item) {
     const chip=document.createElement("span");chip.className=ok?"check-ok":"check-needed";chip.textContent=(ok?"✓ ":"! ")+label;checks.append(chip);
   }
   get("diagnostics").append(checks);
-  if(item.identity_status && item.identity_status!=="verified_exact") {
-    const info=document.createElement("details"),summary=document.createElement("summary"),text=document.createElement("p");
-    summary.textContent="Product identity · "+item.identity_status.replaceAll("_"," ");
-    text.textContent=item.research?.manufacturer_research?.reason || "The exact product model is not independently confirmed. Review the evidence before using model-specific details.";
-    info.append(summary,text);get("diagnostics").append(info);
-  }
   get("suggested-description").value=item.generated_candidate?.description || "";
   get("use-copy").disabled=!get("suggested-description").value;
   renderCatalogEvidence(item);
   const evidence = item.visual_proposal;
-  if (evidence) {
+  if (evidence && item.proposal_revision === item.revision && Object.values(evidence.suggestion || {}).some(Boolean)) {
     const panel = document.createElement("details"), caption = document.createElement("summary");
     caption.textContent = "Identification suggestions · " + evidence.confidence;
     panel.append(caption);
-    for (const observation of evidence.observations || []) {
-      const line = document.createElement("p"); line.textContent = observation; panel.append(line);
-    }
     if (item.proposal_revision === item.revision) {
       for (const field of ["title","model"]) {
         if (!evidence.suggestion?.[field]) continue;
