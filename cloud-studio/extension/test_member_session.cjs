@@ -26,7 +26,7 @@ const context=vm.createContext({chrome,URL,Uint8Array,TextEncoder,console,
   fetch:async(url,options={})=>{
     requests.push({url:String(url),options});
     if(String(url).includes("grant_type=refresh_token"))return {ok:true,json:async()=>({
-      access_token:"new.token.value",refresh_token:"r".repeat(24),expires_at:Math.floor(Date.now()/1000)+3600
+      access_token:"new.token.value",refresh_token:"r".repeat(12),expires_at:Math.floor(Date.now()/1000)+3600
     })};
     return {ok:true,json:async()=>({})};
   }
@@ -40,8 +40,9 @@ function connect(message,origin="https://crazymoe-marketplace-studio.vercel.app"
   return new Promise(resolve=>assert.equal(external(message,{origin},resolve),true));
 }
 (async()=>{
-  const fresh={access_token:"old.token.value",refresh_token:"x".repeat(24),expires_at:Math.floor(Date.now()/1000)+3600};
+  const fresh={access_token:"old.token.value",refresh_token:"x".repeat(12),expires_at:Math.floor(Date.now()/1000)+3600};
   assert.equal((await connect({type:"STUDIO_AUTH_SESSION",session:fresh})).ok,true);
+  assert.equal((await connect({type:"STUDIO_AUTH_SESSION",session:{...fresh,refresh_token:"short"}})).ok,false);
   await vm.runInContext("studioMemberFetch('/rest/v1/active_listings?limit=1')",context);
   assert.equal(requests.at(-1).options.headers.Authorization,"Bearer old.token.value");
   assert.equal(external({type:"STUDIO_AUTH_SESSION",session:fresh},{origin:"https://evil.invalid"},()=>{}),false);
