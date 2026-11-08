@@ -1,19 +1,21 @@
-"""Guarded NGK 68.1.23 -> 68.1.24 approved-picker upgrade; leaves gallery/photo queue code intact."""
+"""Guarded NGK 68.1.24 -> 68.1.25 posting-loop upgrade; leaves gallery/photo queue code intact."""
 from pathlib import Path
 import hashlib,json,subprocess,sys
-EXPECTED={'approved_batch_panel.js':'d9fd7a489da8c141ab26b3c10cb8d4d969de2eaa9ea255257e1fe60045722c54','ngk_cloud_worker.js':'28e43785c7bb833b15541a9d2f8be478f930106a595753713cbd4ec1bd743038','popup.js':'5725ae82701692d862fa9ea8d756bb8b3f08a3654498bb241165678394a940aa','popup.html':'20b08d72b60122f357e23e1e4e05305aa3eaf61a0102c197d6a8733b85381a05','manifest.json':'3d0922410e5efb814f519e388ecc89c3c85b8c1286e213d7e34020d5d0fcc132'}
+EXPECTED={'approved_batch_panel.js':'dde8171d226d7509cb13d64174cf03da208ef38e3dc062406109dc912fdf5397','approved_picker_worker.js':'9b8fa08c7e3f3ce68919b88364e47a69dd455f44e851c3e80b94dc3ab50df3e4','ngk_cloud_worker.js':'d9d56522e373d16a59327e978f42710686bd9a2eca10c601c53df6cb43ae6340','manifest.json':'08d21e0ef987505841dc2370f29912f86535447c274e74360ed7d2623d880c9a'}
 def main(target,source):
  target=Path(target);source=Path(source);originals={n:(target/n).read_bytes() for n in EXPECTED}
  for name,data in originals.items():
   if hashlib.sha256(data).hexdigest()!=EXPECTED[name]:raise SystemExit('Concurrent extension change; inspect before installation: '+name)
  manifest=json.loads(originals['manifest.json'])
- if manifest['version']!='68.1.23':raise SystemExit('Unexpected installed version')
- manifest['version']='68.1.24'
- changes={name:(source/name).read_bytes() for name in ('approved_batch_panel.js','approved_picker_worker.js','ngk_cloud_worker.js','popup.js','popup.html')}
+ if manifest['version']!='68.1.24':raise SystemExit('Unexpected installed version')
+ manifest['version']='68.1.25'
+ for entry in manifest['content_scripts']:
+  if 'approved_batch_panel.js' in entry.get('js',[]):entry['matches']=['https://www.facebook.com/marketplace/*','https://m.facebook.com/marketplace/*']
+ changes={name:(source/name).read_bytes() for name in ('approved_batch_panel.js','approved_picker_worker.js','ngk_cloud_worker.js')}
  changes['manifest.json']=(json.dumps(manifest,indent=2)+'\n').encode()
  for name in changes:
   if name.endswith('.js'):subprocess.run(['node','--check',str(source/name)],check=True)
- backup=target.parent/'pre-approved-picker-68.1.23';backup.mkdir(exist_ok=True)
+ backup=target.parent/'pre-posting-loop-68.1.24';backup.mkdir(exist_ok=True)
  for name,data in originals.items():
   path=backup/name
   if path.exists() and path.read_bytes()!=data:raise SystemExit('Backup conflict')

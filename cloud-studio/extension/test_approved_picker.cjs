@@ -2,7 +2,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),fs=requir
 const source=fs.readFileSync(__dirname+'/approved_picker_worker.js','utf8');
 function fixture(){
  const listeners=[],session={},calls=[];
- const c={console,studioFillBusy:new Set(),studioMemberFetch:async(url,options)=>{calls.push({url,options});return {ok:true,json:async()=>'a'.repeat(64)}},studioFillApprovedTab:async tab=>{calls.push({filled:tab});return {ok:true,photo_count:2}},chrome:{runtime:{id:'extension',getURL:()=> 'chrome-extension://extension/',onMessage:{addListener:fn=>listeners.push(fn)}},tabs:{get:async()=>({url:'https://www.facebook.com/marketplace/create/item'})},scripting:{executeScript:async()=>[{result:true}]},storage:{session:{get:async key=>({[key]:session[key]}),set:async values=>Object.assign(session,values)}}}};
+ const c={console,studioFillBusy:new Set(),studioMemberFetch:async(url,options)=>{calls.push({url,options});return {ok:true,json:async()=>'a'.repeat(64)}},studioFillApprovedTab:async tab=>{calls.push({filled:tab});return {ok:true,photo_count:2}},chrome:{runtime:{id:'extension',getURL:()=> 'chrome-extension://extension/',onMessage:{addListener:fn=>listeners.push(fn)}},tabs:{onRemoved:{addListener:()=>{}},get:async()=>({url:'https://www.facebook.com/marketplace/create/item'})},scripting:{executeScript:async()=>[{result:true}]},storage:{session:{get:async key=>key===null?{...session}:({[key]:session[key]}),set:async values=>Object.assign(session,values),remove:async key=>delete session[key]}}}};
  vm.createContext(c);vm.runInContext(source,c);return {c,calls,session,listeners,run:js=>vm.runInContext(js,c)};
 }
 test('approved list contains all nine active approvals and no private notes',()=>{
@@ -38,8 +38,79 @@ test('native fill verifies fields, condition and photo count; cleans up on failu
   const f=fixture();f.c.importScripts=()=>{};f.c.chrome.alarms={onAlarm:{addListener:()=>{}}};f.c.chrome.runtime.onMessageExternal={addListener:()=>{}};f.c.studioOrigins=new Set();
   // Separate scope supplies the real existing native-fill implementation.
   const c={...f.c};delete c.studioFillBusy;delete c.studioFillApprovedTab;vm.createContext(c);vm.runInContext(fs.readFileSync(__dirname+'/ngk_cloud_worker.js','utf8'),c);
-  const trace=[];c.studioCloudNext=async()=>({source:'studio',item:{id:'one',title:'Used speaker',price:125,description:'Cracked glass.',condition:'Used - Fair',imageBlobs:[{dataUrl:'data:image/jpeg;base64,fixture'}]}});c.moeFillExplicitListing=()=>{};
+  const trace=[];c.studioSaveContext=async(id,value)=>{c.savedContext=value;};c.studioCloudNext=async()=>({source:'studio',item:{id:'one',revision:3,title:'Used speaker',price:125,description:'Cracked glass.',condition:'Used - Fair',imageBlobs:[{dataUrl:'data:image/jpeg;base64,fixture'}]}});c.moeFillExplicitListing=()=>{};
   c.chrome.scripting.executeScript=async()=>[{result:{ok:true}}];c.studioAssertBlank=async()=>trace.push('blank');c.waitFacebookFields=async()=>trace.push('fields');c.waitFacebookCondition=async()=>trace.push('condition');c.stageStudioPhotos=async()=>[{path:'staged.jpg',id:1}];c.setNativeFacebookPhotos=async()=>trace.push('attached');c.waitFacebookPhotoCount=async()=>{if(fail)throw Error('Photo count mismatch');trace.push('count')};c.scheduleStagedPhotoCleanup=async()=>trace.push('scheduled');c.removeStagedPhotos=async()=>trace.push('removed');
-  if(fail){await assert.rejects(vm.runInContext('studioFillApprovedTab(7)',c),/Photo count/);assert.ok(trace.includes('removed'))}else{assert.equal((await vm.runInContext('studioFillApprovedTab(7)',c)).photo_count,1);assert.deepEqual(trace,['blank','fields','condition','attached','count','scheduled']);}
+  if(fail){await assert.rejects(vm.runInContext('studioFillApprovedTab(7)',c),/Photo count/);assert.ok(trace.includes('removed'));assert.equal(c.savedContext.phase,'error')}else{assert.equal((await vm.runInContext('studioFillApprovedTab(7)',c)).photo_count,1);assert.deepEqual(trace,['blank','fields','condition','attached','count','scheduled']);assert.equal(c.savedContext.phase,'loaded');assert.equal(c.savedContext.revision,3);}
  }
+});
+
+function loopFixture(){
+ const f=fixture();let created=20;
+ f.c.sleepCloud=async()=>{};
+ f.c.chrome.tabs.create=async values=>{f.calls.push({created:values});return {id:++created}};
+ f.c.chrome.tabs.update=async(id,values)=>{f.calls.push({updated:id,values});return {id}};
+ f.c.chrome.tabs.get=async id=>({id,status:'complete',url:'https://www.facebook.com/marketplace/create/item/'});
+ f.c.studioAutoFill=async(id,item)=>{f.calls.push({autoFill:id,item});};
+ f.c.rows=[{id:'next',revision:4,status:'approved',fields:{title:'Next product'},lifecycle:'active'}];
+ f.c.studioMemberFetch=async(url,options)=>{f.calls.push({url,options});return {ok:true,json:async()=>url.endsWith('studio_state')?f.c.rows:{ok:true}}};
+ f.session.studioApprovedContext7={id:'current',revision:3,title:'Current product',phase:'loaded',photo_count:2};
+ return f;
+}
+test('seller confirmation saves before next form opens and auto loads exact next approval',async()=>{
+ const f=loopFixture();const r=await f.run("studioAdvance(7,{type:'STUDIO_APPROVED_CONFIRM'})");
+ assert.equal(r.nextTabId,21);assert.equal(f.session.studioApprovedContext7.phase,'confirmed');
+ assert.deepEqual(JSON.parse(f.calls[0].options.body),{p_item:'current',p_revision:3,p_confirmed:true});
+ assert.equal(f.calls[0].url,'/rest/v1/rpc/studio_confirm_published');
+ assert.equal(f.calls.filter(x=>x.created).length,1);assert.equal(f.calls.find(x=>x.autoFill).item.id,'next');
+ await f.run("studioAdvance(7,{type:'STUDIO_APPROVED_CONFIRM'})");
+ assert.equal(f.calls.filter(x=>x.created).length,1);assert.equal(f.calls.filter(x=>x.url?.endsWith('studio_confirm_published')).length,1);
+});
+test('confirmation failure or changed revision never opens another tab',async()=>{
+ const f=loopFixture();f.c.studioMemberFetch=async()=>({ok:false,json:async()=>({message:'Listing changed; refresh before confirming'})});
+ await assert.rejects(f.run("studioAdvance(7,{type:'STUDIO_APPROVED_CONFIRM'})"),/Listing changed/);
+ assert.equal(f.session.studioApprovedContext7.phase,'loaded');assert.equal(f.calls.length,0);
+});
+test('double confirmation clicks save and advance only once',async()=>{
+ const f=loopFixture();const first=f.run("studioAdvance(7,{type:'STUDIO_APPROVED_CONFIRM'})");
+ await assert.rejects(f.run("studioAdvance(7,{type:'STUDIO_APPROVED_CONFIRM'})"),/already being opened/);await first;
+ assert.equal(f.calls.filter(x=>x.created).length,1);
+});
+test('last approved product finishes without opening an empty tab',async()=>{
+ const f=loopFixture();f.c.rows=[];const r=await f.run("studioAdvance(7,{type:'STUDIO_APPROVED_CONFIRM'})");
+ assert.equal(r.done,true);assert.equal(f.session.studioApprovedContext7.done,true);assert.equal(f.calls.filter(x=>x.created).length,0);
+});
+test('Already listed binds selection to current server approval and advances',async()=>{
+ const f=loopFixture();delete f.session.studioApprovedContext7;
+ f.c.studioMemberFetch=async(url,options)=>{f.calls.push({url,options});if(url.endsWith('studio_confirm_published')){f.c.rows=[];return {ok:true,json:async()=>({ok:true})}}return {ok:true,json:async()=>f.c.rows}};
+ const r=await f.run("studioAdvance(7,{type:'STUDIO_APPROVED_ALREADY',id:'next',revision:4})");
+ assert.equal(r.done,true);assert.equal(f.session.studioApprovedContext7.id,'next');assert.equal(f.session.studioApprovedContext7.phase,'confirmed');
+ const other=loopFixture();delete other.session.studioApprovedContext7;
+ await assert.rejects(other.run("studioAdvance(7,{type:'STUDIO_APPROVED_ALREADY',id:'next',revision:3})"),/approval changed/);
+ assert.equal(other.calls.filter(x=>x.url?.endsWith('studio_confirm_published')).length,0);
+});
+test('failure opening next retains saved confirmation and retries without confirming again',async()=>{
+ const f=loopFixture();f.c.chrome.tabs.create=async()=>{throw Error('Tab creation failed')};
+ const r=await f.run("studioAdvance(7,{type:'STUDIO_APPROVED_CONFIRM'})");assert.equal(r.confirmed,true);assert.equal(r.ok,false);
+ assert.equal(f.session.studioApprovedContext7.phase,'confirmed');
+ f.c.chrome.tabs.create=async()=>({id:21});await f.run("studioAdvance(7,{type:'STUDIO_APPROVED_NEXT'})");
+ assert.equal(f.calls.filter(x=>x.url?.endsWith('studio_confirm_published')).length,1);
+});
+test('does not automatically duplicate an approved product already loaded in another tab',async()=>{
+ const f=loopFixture();f.session.studioApprovedContext8={id:'next',phase:'loaded'};
+ const r=await f.run("studioAdvance(7,{type:'STUDIO_APPROVED_CONFIRM'})");assert.equal(r.waiting,true);assert.equal(f.calls.filter(x=>x.created).length,0);
+});
+test('only tracked Marketplace tabs can confirm after leaving the form',async()=>{
+ const f=loopFixture();const send=(message,sender)=>new Promise(resolve=>f.listeners[0](message,sender,resolve));
+ const sender={id:'extension',frameId:0,tab:{id:7},url:'https://www.facebook.com/marketplace/you/selling'};
+ assert.equal((await send({type:'STUDIO_APPROVED_CONTEXT'},sender)).context.id,'current');
+ assert.equal((await send({type:'STUDIO_APPROVED_CONFIRM'},sender)).ok,true);
+ assert.equal((await send({type:'STUDIO_APPROVED_CONFIRM'},{...sender,tab:{id:90}})).ok,false);
+ assert.equal((await send({type:'STUDIO_APPROVED_CONFIRM'},{...sender,frameId:1})).ok,false);
+ assert.equal((await send({type:'STUDIO_APPROVED_CONFIRM'},{...sender,id:'other'})).ok,false);
+});
+test('failed automatic fill preserves product identity for safe new-form retry',async()=>{
+ const f=fixture();f.c.sleepCloud=async()=>{};f.c.chrome.tabs.get=async()=>({status:'complete',url:'https://www.facebook.com/marketplace/create/item/'});
+ f.c.studioFillApprovedTab=async()=>{throw Error('Photos failed')};
+ await f.run("studioAutoFill(7,{id:'next',revision:4,title:'Next product'})");
+ assert.equal(f.session.studioApprovedContext7.phase,'error');assert.equal(f.session.studioApprovedContext7.id,'next');
 });

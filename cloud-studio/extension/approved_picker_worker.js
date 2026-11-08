@@ -1,4 +1,4 @@
-/* Live cloud-approved inventory for a blank Facebook item form. */
+/* Approved inventory, seller confirmation, and the next blank Facebook form. */
 'use strict';
 const studioPickerOpening=new Set();
 function studioPickerSender(sender,allowPopup=false){
@@ -55,11 +55,105 @@ async function studioPickerSelect(tabId,id,revision){
   return await studioFillApprovedTab(tabId);
  }finally{studioPickerOpening.delete(tabId);}
 }
+const STUDIO_CONTEXT='studioApprovedContext';
+let studioAdvancing=false;
+const studioContext=async tabId=>(await chrome.storage.session.get(STUDIO_CONTEXT+tabId))[STUDIO_CONTEXT+tabId]||null;
+const studioSaveContext=(tabId,value)=>chrome.storage.session.set({[STUDIO_CONTEXT+tabId]:{...value,updated_at:Date.now()}});
+function studioMarketSender(sender){
+ return sender.id===chrome.runtime.id&&sender.frameId===0&&Boolean(sender.tab?.id)&&/^https:\/\/(www|m)\.facebook\.com\/marketplace(?:\/|[?#]|$)/.test(sender.url||'');
+}
+async function studioWaitBlank(tabId){
+ for(let i=0;i<120;i++){
+  const tab=await chrome.tabs.get(tabId);
+  if(tab.status==='complete'){
+   try{await studioAssertBlank(tabId);return;}catch{}
+  }
+  await sleepCloud(250);
+ }
+ throw Error('The new Facebook form did not become ready. Finish loading it, then retry on a new form.');
+}
+async function studioAutoFill(tabId,item){
+ try{
+  await studioWaitBlank(tabId);
+  const result=await studioPickerSelect(tabId,item.id,item.revision);
+  if(!result?.ok)throw Error(result?.error||'Facebook could not load this product');
+ }catch(error){
+  await studioSaveContext(tabId,{...item,phase:'error',error:String(error.message||error)});
+ }
+}
+async function studioNewForm(sourceTabId,item){
+ const tab=await chrome.tabs.create({url:'about:blank',active:true});
+ // Persist the link before navigation: repeated confirmation focuses this same tab.
+ const source=await studioContext(sourceTabId);
+ await studioSaveContext(sourceTabId,{...source,nextTabId:tab.id});
+ await studioSaveContext(tab.id,{...item,phase:'loading'});
+ try{
+  await chrome.tabs.update(tab.id,{url:'https://www.facebook.com/marketplace/create/item/'});
+ }catch(error){
+  await studioSaveContext(tab.id,{...item,phase:'error',error:String(error.message||error)});
+  throw error;
+ }
+ void studioAutoFill(tab.id,item);
+ return {ok:true,confirmed:source?.phase==='confirmed',nextTabId:tab.id,title:item.title};
+}
+async function studioOpenNext(tabId){
+ const context=await studioContext(tabId);
+ if(context?.nextTabId){
+  try{await chrome.tabs.get(context.nextTabId);await chrome.tabs.update(context.nextTabId,{active:true});return {ok:true,confirmed:true,nextTabId:context.nextTabId};}catch{}
+ }
+ const rows=studioApprovedRows(await studioPickerRpc('studio_state'));
+ const sessions=await chrome.storage.session.get(null);
+ const occupied=new Set(Object.entries(sessions).filter(([key,value])=>key.startsWith(STUDIO_CONTEXT)&&['loaded','loading','error'].includes(value?.phase)).map(([,value])=>value.id));
+ const next=rows.find(item=>!occupied.has(item.id));
+ if(!next){
+  const waiting=rows.length>0;
+  await studioSaveContext(tabId,{...context,phase:'confirmed',done:!waiting,waiting});
+  return {ok:true,confirmed:true,done:!waiting,waiting};
+ }
+ return studioNewForm(tabId,next);
+}
+async function studioAdvance(tabId,message){
+ if(studioAdvancing)throw Error('The next product is already being opened.');
+ studioAdvancing=true;
+ try{
+  let context=await studioContext(tabId);
+  if(message.type==='STUDIO_APPROVED_RETRY'){
+   if(context?.phase!=='error')throw Error('Only an incomplete load can be retried.');
+   if(context.nextTabId){try{await chrome.tabs.get(context.nextTabId);await chrome.tabs.update(context.nextTabId,{active:true});return {ok:true,nextTabId:context.nextTabId};}catch{}}
+   return await studioNewForm(tabId,{id:context.id,revision:context.revision,title:context.title});
+  }
+  if(context?.phase!=='confirmed'){
+   if(message.type==='STUDIO_APPROVED_NEXT')throw Error('Confirm the current product as posted first.');
+   if(message.type==='STUDIO_APPROVED_ALREADY'){
+    if(context&&['loaded','loading','error'].includes(context.phase))throw Error('Finish the product already assigned to this tab first.');
+    const rows=studioApprovedRows(await studioPickerRpc('studio_state'));
+    context=rows.find(item=>item.id===message.id&&item.revision===message.revision);
+    if(!context)throw Error('This approval changed. Refresh the approved list.');
+   }else if(context?.phase!=='loaded')throw Error('Load an approved product before confirming it as posted.');
+   const result=await studioPickerRpc('studio_confirm_published',{p_item:context.id,p_revision:context.revision,p_confirmed:true});
+   if(!result?.ok)throw Error('Studio did not save the posted confirmation.');
+   context={...context,phase:'confirmed',confirmed_at:Date.now()};
+   await studioSaveContext(tabId,context);
+  }
+  try{return await studioOpenNext(tabId);}catch(error){return {ok:false,confirmed:true,error:'Marked as listed. '+String(error.message||error)+' Use Open next approved product to continue.'};}
+ }finally{studioAdvancing=false;}
+}
+chrome.tabs.onRemoved.addListener(tabId=>{void chrome.storage.session.remove(STUDIO_CONTEXT+tabId);});
 chrome.runtime.onMessage.addListener((message,sender,reply)=>{
- if(!['STUDIO_APPROVED_LIST','STUDIO_APPROVED_SELECT'].includes(message?.type))return false;
- if(!studioPickerSender(sender,message.type==='STUDIO_APPROVED_LIST')){reply({ok:false,error:'Open the approved panel on Facebook or the Commerce OS popup.'});return false;}
- const task=message.type==='STUDIO_APPROVED_LIST'
-  ?studioPickerRpc('studio_state').then(state=>({ok:true,items:studioApprovedRows(state)}))
-  :studioPickerSelect(sender.tab.id,message.id,message.revision);
- task.then(reply).catch(error=>reply({ok:false,error:String(error.message||error)}));return true;
+ const type=message?.type;
+ if(!['STUDIO_APPROVED_LIST','STUDIO_APPROVED_SELECT','STUDIO_APPROVED_CONTEXT','STUDIO_APPROVED_CONFIRM','STUDIO_APPROVED_ALREADY','STUDIO_APPROVED_NEXT','STUDIO_APPROVED_RETRY'].includes(type))return false;
+ (async()=>{
+  const ordinary=studioPickerSender(sender,type==='STUDIO_APPROVED_LIST');
+  const market=studioMarketSender(sender);
+  if(!ordinary&&!market)throw Error('Open the approved panel on Facebook or the Commerce OS popup.');
+  const context=sender.tab?.id?await studioContext(sender.tab.id):null;
+  if(type==='STUDIO_APPROVED_CONTEXT')return {ok:true,context};
+  if(!ordinary&&!context)throw Error('No approved product is assigned to this Facebook tab.');
+  if(type==='STUDIO_APPROVED_LIST')return {ok:true,items:studioApprovedRows(await studioPickerRpc('studio_state'))};
+  if(type==='STUDIO_APPROVED_SELECT'){
+   if(!studioPickerSender(sender))throw Error('Open a blank Facebook item form first.');
+   return studioPickerSelect(sender.tab.id,message.id,message.revision);
+  }
+  return studioAdvance(sender.tab.id,message);
+ })().then(reply).catch(error=>reply({ok:false,error:String(error.message||error)}));return true;
 });

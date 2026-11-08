@@ -119,9 +119,12 @@ const studioFillBusy=new Set();
 async function studioFillApprovedTab(tabId){
  if(studioFillBusy.has(tabId))throw Error('A product is already loading in this tab.');
  studioFillBusy.add(tabId);
+ let identity=null;
  try{
     const draft = await studioCloudNext(tabId, "MOE_LOCAL_NEXT");
     if (draft?.source !== "studio") throw Error("Open a fresh approved draft from Studio.");
+    identity={id:draft.item.id,revision:Number(draft.item.revision),title:draft.item.title};
+    await studioSaveContext(tabId,{...identity,phase:'loading'});
     const photos=draft.item.imageBlobs;
     if(!Array.isArray(photos)||!photos.length||photos.length>10)throw Error("Approved photos unavailable");
     const prepared={...draft.item,imageBlobs:[],images:[],deferPhotos:true};
@@ -130,7 +133,7 @@ async function studioFillApprovedTab(tabId){
       target:{tabId:tabId}, world:"ISOLATED", args:[prepared, true], func:moeFillExplicitListing
     });
     const result=filled[0]?.result||{ok:false,error:"Facebook could not verify this form."};
-    if(!result.ok)return result;
+    if(!result.ok)throw Error(result.error||'Facebook could not verify this form.');
     await waitFacebookFields(tabId,prepared);
     await waitFacebookCondition(tabId,prepared.condition);
     const staged=await stageStudioPhotos(tabId,photos);
@@ -140,11 +143,15 @@ async function studioFillApprovedTab(tabId){
       await waitFacebookPhotoCount(tabId,photos.length);
       await scheduleStagedPhotoCleanup(staged);
       accepted=true;
-      return {ok:true,photo_count:photos.length,item_id:draft.item.id,title:draft.item.title};
+      await studioSaveContext(tabId,{...identity,phase:'loaded',photo_count:photos.length});
+      return {ok:true,photo_count:photos.length,item_id:draft.item.id,revision:identity.revision,title:draft.item.title};
     }finally{
       if(!accepted)await removeStagedPhotos(staged);
     }
 
+ }catch(error){
+  if(identity)await studioSaveContext(tabId,{...identity,phase:'error',error:String(error.message||error)});
+  throw error;
  }finally{studioFillBusy.delete(tabId);}
 }
 importScripts('approved_picker_worker.js');
