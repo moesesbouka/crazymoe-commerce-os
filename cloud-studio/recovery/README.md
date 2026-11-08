@@ -61,3 +61,18 @@ node --test cloud-studio/recovery/test_copy_manifest.mjs
 ```
 
 Tests use synthetic bytes only. No test publishes listings or edits inventory.
+
+
+## Cross-project core restore checkpoint (2026-11-08)
+
+The recovery document was transferred to the separate Supabase project
+`dywwebxyuskriiwoeugc` through a one-time, hash-checked receiver. Run
+`5b54e144-5ae8-4d5b-afa6-157e74faa918` materialized 27 typed tables and
+3,839 rows into the isolated `studio_restore` schema. An independent
+order-insensitive SHA-256 comparison of every table returned `all_match=true`.
+
+The receiver's anonymous execute grants were revoked and its one-time credential
+was rotated after verification. The pre-existing empty starter tables were not
+modified. This proves cross-project recovery of the core table layouts and data.
+Auth identities, application routines, constraints, and private media bytes remain
+separate recovery scopes; media integrity is covered by the offline bundle verifier.
