@@ -43,6 +43,21 @@ async function connectStudioExtension(){
   for(const id of ["jhkkefonggnemmdpaahpnkgcgfjibeal","kbdeepgfbofgljhijkdejmodfhfeeplh"])
     await chrome.runtime.sendMessage(id,message).catch(()=>null);
 }
+// The installed extension can request a fresh session after Chrome restarts.
+window.addEventListener("message", async event => {
+  if(event.source!==window||event.origin!==location.origin||
+     event.data?.type!=="CRAZYMOE_STUDIO_SESSION_REQUEST"||!event.data.requestId)return;
+  let active=null;
+  try{
+    const {data,error}=await auth.getSession();
+    if(error)throw error;
+    active=data.session;
+  }catch{}
+  window.postMessage({type:"CRAZYMOE_STUDIO_SESSION_RESPONSE",requestId:event.data.requestId,
+    session:active?.access_token&&active?.refresh_token&&active?.expires_at?{
+      access_token:active.access_token,refresh_token:active.refresh_token,expires_at:active.expires_at
+    }:null},location.origin);
+});
 // Missing migrated fields may use prepared suggestions; explicit seller values,
 // including empty strings, always win. Suggestions are persisted before review.
 function editorValue(item, key) {
