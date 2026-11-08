@@ -5,7 +5,10 @@ const studioPublicKey="sb_publishable_xfIVDlnktUiJYm5U_1jEtw_Res600Af";
 function validStudioSession(value){
   return value && typeof value.access_token==="string" && value.access_token.split(".").length===3 &&
     value.access_token.length<4096 && typeof value.refresh_token==="string" &&
-    value.refresh_token.length>=20 && value.refresh_token.length<1024 &&
+    // Supabase refresh tokens are opaque. Current sessions can use a compact
+    // 12-character token, so validate a conservative lower bound without
+    // assuming the provider's token format.
+    value.refresh_token.length>=8 && value.refresh_token.length<1024 &&
     Number.isFinite(Number(value.expires_at)) && Number(value.expires_at)>Date.now()/1000-120 &&
     Number(value.expires_at)<Date.now()/1000+86400;
 }
