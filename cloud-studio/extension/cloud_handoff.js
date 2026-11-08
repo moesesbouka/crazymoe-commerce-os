@@ -2,34 +2,79 @@
 const studioOrigins=new Set(["https://crazymoe-marketplace-studio.vercel.app","https://studio.crazymoe.com"]);
 const handoffRoot="https://sfheqjnxlkygjfohoybo.supabase.co";
 const studioPublicKey="sb_publishable_xfIVDlnktUiJYm5U_1jEtw_Res600Af";
-function validStudioSession(value){
+function validStudioSession(value, fresh=false){
   return value && typeof value.access_token==="string" && value.access_token.split(".").length===3 &&
     value.access_token.length<4096 && typeof value.refresh_token==="string" &&
-    // Supabase refresh tokens are opaque. Current sessions can use a compact
-    // 12-character token, so validate a conservative lower bound without
-    // assuming the provider's token format.
     value.refresh_token.length>=8 && value.refresh_token.length<1024 &&
-    Number.isFinite(Number(value.expires_at)) && Number(value.expires_at)>Date.now()/1000-120 &&
-    Number(value.expires_at)<Date.now()/1000+86400;
+    Number.isFinite(Number(value.expires_at)) && Number(value.expires_at)>0 &&
+    (!fresh || Number(value.expires_at)>Date.now()/1000-120) && Number(value.expires_at)<Date.now()/1000+86400;
 }
-async function rememberStudioSession(value){
-  if(!validStudioSession(value))throw Error("Invalid Studio session");
+async function rememberStudioSession(value,fresh=true){
+  if(!validStudioSession(value,fresh))throw Error("Invalid Studio session");
   const session={access_token:value.access_token,refresh_token:value.refresh_token,expires_at:Number(value.expires_at)};
   await chrome.storage.session.set({studioAuthSession:session});
   return session;
 }
+const readStudioSession=async()=>(await chrome.storage.session.get("studioAuthSession")).studioAuthSession;
+let studioConnectFlight=null,studioTokenFlight=null;
+async function reconnectStudio(){
+  if(studioConnectFlight)return studioConnectFlight;
+  studioConnectFlight=(async()=>{
+    const probe=async tab=>{
+      if(!tab?.id || !studioOrigins.has(new URL(tab.url||"about:blank").origin))return null;
+      try{
+        const result=await chrome.scripting.executeScript({
+          target:{tabId:tab.id},world:"MAIN",
+          func:()=>{
+            if(!["https://crazymoe-marketplace-studio.vercel.app","https://studio.crazymoe.com"].includes(location.origin))return null;
+            try{
+              const value=JSON.parse(localStorage.getItem("crazymoe-studio-auth")||"null");
+              return value&&{access_token:value.access_token,refresh_token:value.refresh_token,expires_at:value.expires_at};
+            }catch{return null;}
+          }
+        });
+        const session=result?.[0]?.result;
+        if(validStudioSession(session))return rememberStudioSession(session,false);
+        await chrome.tabs.update(tab.id,{active:true});
+        throw Error("Sign in to the Studio tab, then click Refresh approved.");
+      }catch(error){if(String(error.message).startsWith("Sign in to"))throw error;}
+      return null;
+    };
+    const tabs=await chrome.tabs.query({url:[...studioOrigins].map(origin=>origin+"/*")});
+    for(const tab of tabs.sort((a,b)=>Number(b.active)-Number(a.active))){const session=await probe(tab);if(session)return session;}
+    // A fresh tab obtains current app code without refreshing an editor with unsaved changes.
+    const opened=await chrome.tabs.create({url:"https://crazymoe-marketplace-studio.vercel.app/app/",active:false});
+    for(let attempt=0;attempt<40;attempt++){
+      const tab=await chrome.tabs.get(opened.id);
+      if(tab.status==="complete"){const session=await probe(tab);if(session)return session;break;}
+      await new Promise(resolve=>setTimeout(resolve,250));
+    }
+    await chrome.tabs.update(opened.id,{active:true});
+    throw Error("Studio could not connect yet. Finish signing in in the Studio tab, then click Refresh approved.");
+  })();
+  try{return await studioConnectFlight;}finally{studioConnectFlight=null;}
+}
 async function studioMemberToken(){
-  let {studioAuthSession:session}=await chrome.storage.session.get("studioAuthSession");
-  if(!validStudioSession(session))throw Error("Open the signed-in Studio once to connect this browser.");
-  if(session.expires_at>Date.now()/1000+45)return session.access_token;
-  const response=await fetch(handoffRoot+"/auth/v1/token?grant_type=refresh_token",{
-    method:"POST",headers:{apikey:studioPublicKey,"Content-Type":"application/json"},
-    body:JSON.stringify({refresh_token:session.refresh_token}),cache:"no-store"
-  });
-  if(!response.ok){await chrome.storage.session.remove("studioAuthSession");throw Error("Studio session expired. Reopen Studio.");}
-  const refreshed=await response.json();
-  session=await rememberStudioSession(refreshed);
-  return session.access_token;
+  const existing=await readStudioSession();
+  if(validStudioSession(existing)&&existing.expires_at>Date.now()/1000+45)return existing.access_token;
+  if(studioTokenFlight)return studioTokenFlight;
+  studioTokenFlight=(async()=>{
+    let session=await readStudioSession();
+    if(!validStudioSession(session))session=await reconnectStudio();
+    if(session.expires_at>Date.now()/1000+45)return session.access_token;
+    // Expired access tokens still have usable refresh tokens; serialize token rotation.
+    const response=await fetch(handoffRoot+"/auth/v1/token?grant_type=refresh_token",{
+      method:"POST",headers:{apikey:studioPublicKey,"Content-Type":"application/json"},
+      body:JSON.stringify({refresh_token:session.refresh_token}),cache:"no-store"
+    });
+    if(response.ok)return (await rememberStudioSession(await response.json())).access_token;
+    if(response.status>=500)throw Error("Studio is temporarily unavailable. Try Refresh approved again.");
+    const current=await readStudioSession();
+    if(current?.refresh_token!==session.refresh_token&&validStudioSession(current,true))return current.access_token;
+    await chrome.storage.session.remove("studioAuthSession");
+    return (await reconnectStudio()).access_token;
+  })();
+  try{return await studioTokenFlight;}finally{studioTokenFlight=null;}
 }
 async function studioMemberFetch(input,options={}){
   const url=new URL(input,handoffRoot);
@@ -56,6 +101,13 @@ chrome.runtime.onMessageExternal.addListener((message,sender,reply)=>{
 chrome.tabs.onRemoved.addListener(id=>{chrome.storage.session.remove("studioDraft"+id);});
 // Report only whether this tab is assigned to a Studio transfer. The token stays in the worker.
 chrome.runtime.onMessage.addListener((message,sender,reply)=>{
+  if(message?.type==="STUDIO_AUTH_SESSION"){
+    const origin=new URL(sender.url||"about:blank").origin;
+    if(sender.id!==chrome.runtime.id||sender.frameId!==0||!sender.tab?.id||!studioOrigins.has(origin))return false;
+    rememberStudioSession(message.session).then(()=>reply({ok:true})).catch(()=>reply({ok:false,error:"Invalid Studio session"}));
+    return true;
+  }
+
   if(message?.type==="STUDIO_MEMBER_PROBE"){
     if(sender.id!==chrome.runtime.id||!sender.url?.startsWith(chrome.runtime.getURL(""))){reply({ok:false});return false;}
     studioMemberFetch("/rest/v1/active_listings?select=facebook_id&limit=1")
