@@ -112,30 +112,39 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     reply({ok:false,error:"Open a Facebook item form from Studio."});
     return false;
   }
-  (async () => {
-    const draft = await studioCloudNext(sender.tab.id, "MOE_LOCAL_NEXT");
+  studioFillApprovedTab(sender.tab.id).then(reply).catch(error=>reply({ok:false,error:error.message}));
+  return true;
+});
+const studioFillBusy=new Set();
+async function studioFillApprovedTab(tabId){
+ if(studioFillBusy.has(tabId))throw Error('A product is already loading in this tab.');
+ studioFillBusy.add(tabId);
+ try{
+    const draft = await studioCloudNext(tabId, "MOE_LOCAL_NEXT");
     if (draft?.source !== "studio") throw Error("Open a fresh approved draft from Studio.");
     const photos=draft.item.imageBlobs;
     if(!Array.isArray(photos)||!photos.length||photos.length>10)throw Error("Approved photos unavailable");
     const prepared={...draft.item,imageBlobs:[],images:[],deferPhotos:true};
+    await studioAssertBlank(tabId);
     const filled = await chrome.scripting.executeScript({
-      target:{tabId:sender.tab.id}, world:"ISOLATED", args:[prepared, true], func:moeFillExplicitListing
+      target:{tabId:tabId}, world:"ISOLATED", args:[prepared, true], func:moeFillExplicitListing
     });
     const result=filled[0]?.result||{ok:false,error:"Facebook could not verify this form."};
     if(!result.ok)return result;
-    await waitFacebookFields(sender.tab.id,prepared);
-    await waitFacebookCondition(sender.tab.id,prepared.condition);
-    const staged=await stageStudioPhotos(sender.tab.id,photos);
+    await waitFacebookFields(tabId,prepared);
+    await waitFacebookCondition(tabId,prepared.condition);
+    const staged=await stageStudioPhotos(tabId,photos);
     let accepted=false;
     try{
-      await setNativeFacebookPhotos(sender.tab.id,staged.map(row=>row.path));
-      await waitFacebookPhotoCount(sender.tab.id,photos.length);
+      await setNativeFacebookPhotos(tabId,staged.map(row=>row.path));
+      await waitFacebookPhotoCount(tabId,photos.length);
       await scheduleStagedPhotoCleanup(staged);
       accepted=true;
-      return {ok:true,photo_count:photos.length};
+      return {ok:true,photo_count:photos.length,item_id:draft.item.id,title:draft.item.title};
     }finally{
       if(!accepted)await removeStagedPhotos(staged);
     }
-  })().then(reply).catch(error=>reply({ok:false,error:error.message}));
-  return true;
-});
+
+ }finally{studioFillBusy.delete(tabId);}
+}
+importScripts('approved_picker_worker.js');
