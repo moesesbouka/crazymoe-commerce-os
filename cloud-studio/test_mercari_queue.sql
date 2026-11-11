@@ -52,6 +52,24 @@ begin
  if has_function_privilege('anon','public.studio_mercari_state()','execute') or has_table_privilege('authenticated','studio_core.mercari_queue','select')
  or has_function_privilege('authenticated','studio_core.mercari_source(text,text)','execute') then raise exception 'Overbroad client privileges'; end if;
 end $$;
+do $$
+declare owner uuid; item uuid; q jsonb; result jsonb;
+begin
+ select owner_id into owner from studio_core.mercari_queue where source_id='mercari-transaction-test';
+ perform set_config('request.jwt.claims',jsonb_build_object('sub',owner,'role','authenticated')::text,true);
+ result:=public.studio_mercari_categories('[["Electronics","Home Audio","Home Speakers"]]');
+ result:=public.studio_mercari_categories('[["Electronics","Home Audio","Home Speakers"],["Home","Furniture"]]');
+ if not (result->'paths') @> '[["Electronics","Home Audio","Home Speakers"],["Home","Furniture"]]'::jsonb then raise exception 'Category merge failed';end if;
+ select id into item from studio_core.mercari_queue where owner_id=owner and source_id='mercari-transaction-test';
+ update studio_core.mercari_queue set state='needs_details' where id=item;
+ select to_jsonb(t) into q from studio_core.mercari_queue t where id=item;
+ begin perform public.studio_mercari_handoff(item,null,'filled','{}');raise exception 'FAIL: null revision accepted';exception when serialization_failure then null;end;
+ perform public.studio_mercari_handoff(item,(q->>'revision')::integer,'filled','{"done":["Title","Photos"]}');
+ result:=public.studio_mercari_handoff(item,(q->>'revision')::integer,'published','{"url":"https://www.mercari.com/us/item/m777777777777/"}');
+ if result->>'state'<>'posted' then raise exception 'Browser publication confirmation failed';end if;
+ if has_function_privilege('anon','public.studio_mercari_categories(jsonb)','execute') or has_table_privilege('authenticated','studio_core.mercari_taxonomy','select') then raise exception 'Categories exposed to unauthorized roles';end if;
+ perform set_config('request.jwt.claims',jsonb_build_object('sub',gen_random_uuid(),'role','authenticated')::text,true);
+end $$;
 set local role authenticated;
 do $$begin
  begin perform public.studio_mercari_state(); raise exception 'FAIL: unauthorized role read'; exception when insufficient_privilege then null; end;

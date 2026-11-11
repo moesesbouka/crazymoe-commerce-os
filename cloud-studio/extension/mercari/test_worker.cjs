@@ -1,0 +1,21 @@
+const vm=require('node:vm'),fs=require('node:fs'),assert=require('node:assert/strict');
+let handle,updated,removed,events=[];const memory={};
+const chrome={runtime:{onMessage:{addListener:fn=>handle=fn}},storage:{session:{get:async k=>({[k]:memory[k]}),set:async value=>Object.assign(memory,value),remove:async k=>delete memory[k]}},tabs:{create:async()=>({id:7}),sendMessage:async(id,message)=>events.push({id,message}),onUpdated:{addListener:fn=>updated=fn},onRemoved:{addListener:fn=>removed=fn}}};
+vm.runInNewContext(fs.readFileSync(__dirname+'/automation-worker.js','utf8'),{chrome,URL,Date,Set,Error,String,Number});
+const request=(message,sender)=>new Promise(resolve=>handle(message,sender,resolve));
+const studio={url:'https://studio.crazymoe.com/mercari.html',tab:{id:1}},target={url:'https://www.mercari.com/sell/',tab:{id:7}};
+const tick=()=>new Promise(r=>setTimeout(r,10));
+(async()=>{
+ assert.equal((await request({type:'CM_MERCARI_PING'},{url:'https://evil.example/',tab:{id:2}})).ok,false);
+ const p={requestId:'test-request',queue_id:'queue-1',revision:1,draft:{title:'Speaker',description:'Real product description.',files:[{base64:'AP8='}]}};
+ assert.equal((await request({type:'CM_MERCARI_FILL',payload:p},studio)).ok,true);
+ assert.equal((await request({type:'CM_MERCARI_READY'},{url:target.url,tab:{id:8}})).job,null);
+ assert.equal((await request({type:'CM_MERCARI_READY'},target)).job.queue_id,'queue-1');
+ await request({type:'CM_MERCARI_PROGRESS',result:{state:'needs_attention',done:['Title']}},target);
+ assert.equal(events.length,1);assert.equal(events[0].id,1);
+ updated(7,{url:'https://www.mercari.com/us/item/m123/'});await tick();assert.equal(events.length,1,'Unrelated navigation cannot mark a listing posted');
+ await request({type:'CM_MERCARI_SUBMIT'},target);updated(7,{url:'https://www.mercari.com/us/item/m123/'});await tick();assert.equal(events.length,2);assert.equal(events[1].message.result.state,'published');
+ updated(7,{url:'https://www.mercari.com/us/item/m123/'});await tick();assert.equal(events.length,2,'Published result cannot repeat');
+ removed(7);await tick();assert.equal(memory['mercari-job:7'],undefined);
+ console.log('PASS: Studio origin restriction, per-tab handoff isolation, result routing, publication-click requirement, duplicate result rejection and tab cleanup.');
+})().catch(e=>{console.error(e);process.exitCode=1;});

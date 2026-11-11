@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Crazy Moe Mercari Companion",
+  "version": "2.0.0",
+  "minimum_chrome_version": "116",
+  "description": "Fill Mercari listings from your saved Crazy Moe Studio inventory.",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://www.mercari.com/*"
+  ],
+  "background": {
+    "service_worker": "automation-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://studio.crazymoe.com/*",
+        "https://crazymoe-marketplace-studio.vercel.app/*"
+      ],
+      "js": [
+        "studio-bridge.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.mercari.com/sell/"
+      ],
+      "js": [
+        "fill.js",
+        "page.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

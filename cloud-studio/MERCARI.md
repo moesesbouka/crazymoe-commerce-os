@@ -11,7 +11,7 @@ The page shares Studio's existing persisted sign-in; it does not require an offi
 
 ## Boundaries and persistence
 
-- This release prepares listings and tracks progress. It does not fill, upload, publish, scrape, or synchronize sales inside Mercari. No paid integration is required.
+- The original preparation-only checkpoint is extended by the automatic handoff described below. The companion fills fields and attaches photos; final publication and carrier selection remain seller actions. No paid integration is required.
 - Queue records, shipping presets and immutable audit events live in private `studio_core` tables. Enabled membership is checked by private definer functions; public wrappers are invoker functions. Clients have no direct table grants. Queues and presets are scoped to the signed-in member.
 - One queue record per member, source kind and source ID. Re-preparation never overwrites an existing draft. Cancelled records can be explicitly rebuilt. Records from distinct source IDs are not automatically assumed to represent the same physical item.
 - Revision checks protect edits from another device. Source digests detect changes in source fields, photo choices and availability before saving, downloading or recording publication. Rebuilding explicitly replaces this Mercari draft's text and photos while retaining shipping; Studio authoring fields are preserved.
@@ -30,3 +30,48 @@ Run DOM tests with jsdom 26 installed on `NODE_PATH`:
 ```sh
 node cloud-studio/web/test_mercari_dom.cjs
 ```
+
+## Automatic form handoff (November 11 update)
+
+The starting source is now **All active Facebook inventory**. The desk reads every
+active imported record across all pages (1,071 at implementation), then searches,
+sorts and paginates locally. This is the saved Facebook import, not a claim that a
+fresh complete Facebook scrape has run. Products without a photo remain visible
+with a placeholder. Grid and table views show cover, title, price, condition,
+category and queue status.
+
+**Open & fill Mercari** uses Crazy Moe Mercari Companion 2.0. The existing companion
+files were updated on both NGK and B3A, with backups retained. Chrome must reload
+the unpacked extension and grant the requested Mercari site access. The current
+browser connection cannot operate Chrome's internal extension settings page.
+Fresh installations can download `/mercari-companion.zip` from Studio.
+
+Studio sends only the explicit queue draft and ordered image files through an
+origin-checked content-script bridge. No Studio access or refresh token is sent
+to the companion. The extension binds an expiring job to a newly opened Mercari
+sell tab. It sets native React form values, follows exact category paths, selects
+an exact brand if Mercari offers it, maps condition controls and attaches the files
+in order. Complete packed-shipping presets populate Mercari's weight/dimension
+picker and open the eligible service selection. The seller confirms the service
+and who pays shipping, then clicks List. The companion never clicks List or Save
+draft and refuses an already populated form.
+
+187 distinct Electronics category paths were read directly from the live listing
+picker and included as a verified initial catalog. Searchable selection, title
+based suggestions and a batch category are available. **Import / refresh Mercari
+categories** walks the actual visible category menu in a separate blank form,
+including other departments, and merges the returned paths into a member-owned
+private catalog. It does not invent category IDs or use hidden Mercari APIs.
+
+After a real seller click on List, a bound-tab item URL observed within two
+minutes can be recorded automatically. The existing inventory digest and queue
+revision are checked before recording that confirmation. The next prepared item
+can then open automatically. A changed listing, unavailable source or existing
+Mercari draft stops the handoff instead of overwriting another item.
+
+Validation adds a form fixture using the observed Mercari test IDs, exact category
+buttons, brands, condition controls and file input. It checks file order and text
+readback, existing-draft rejection and zero List/Save-draft clicks. The UI fixture
+checks the default full inventory and cover/grid/table rendering. Live selectors
+and category choices were inspected in the seller's signed-in Mercari form; a
+full extension-driven production fill still requires the Chrome reload.

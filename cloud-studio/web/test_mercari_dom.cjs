@@ -10,11 +10,13 @@ const dom=new JSDOM(fs.readFileSync(path.join(root,'mercari.html'),'utf8'),{url:
 let queue=[],presets=[],failSave=false,logout,latestDownload;const blobs=new Map();
 w.structuredClone=structuredClone;w.TextEncoder=TextEncoder;w.Blob=Blob;Object.defineProperty(w.crypto,'subtle',{value:webcrypto.subtle});w.URL.createObjectURL=b=>{const key='blob:fixture-'+blobs.size;blobs.set(key,b);return key;};w.URL.revokeObjectURL=key=>blobs.delete(key);
 w.document.addEventListener('click',event=>{if(event.target.tagName==='A'){event.preventDefault();if(event.target.download)latestDownload=blobs.get(event.target.href);}});
+w.MercariBridge={request:async()=>({ok:true,version:2}),onResult:()=>{}};
 w.studioAuth={auth:{initialize:async()=>{},getSession:async()=>({data:{session:{access_token:'fixture'}}}),onAuthStateChange:cb=>logout=()=>cb('SIGNED_OUT')}};
 w.fetch=async(url,options={})=>{
  if(url.includes('/storage/'))return {ok:true,arrayBuffer:async()=>photo.buffer};
  const name=url.split('/').pop(),a=JSON.parse(options.body||'{}');let data;
- if(name==='studio_mercari_inventory')data={items:sources,total:sources.length};
+ if(name==='studio_mercari_categories')data={paths:[]};
+ else if(name==='studio_mercari_inventory')data={items:sources,total:sources.length};
  else if(name==='studio_mercari_state')data={queue,presets};
  else if(name==='studio_mercari_prepare')data=a.p_rows.map((r,i)=>{const q={id:'q'+i,source_kind:r.source_kind,source_id:r.source_id,source_digest:r.digest,source_snapshot:sources.find(s=>s.source_id===r.source_id),draft:r.draft,state:'needs_details',revision:1,stale:false,available:true,issues:issues(r.draft)};queue.push(q);return {id:q.id,created:true};});
  else if(name==='studio_mercari_preset'){presets=[{id:'p1',name:a.p_name,shipping:a.p_shipping}];data=presets[0];}
@@ -28,14 +30,14 @@ w.fetch=async(url,options={})=>{
  }else throw Error('Unexpected API request '+name);
  return {ok:true,json:async()=>structuredClone(data)};
 };
-for(const file of ['workflows.js','mercari-copy.js','mercari.js'])w.eval(fs.readFileSync(path.join(root,file),'utf8'));
+for(const file of ['workflows.js','mercari-copy.js','mercari-categories.js','mercari.js'])w.eval(fs.readFileSync(path.join(root,file),'utf8'));
 const $=id=>w.document.getElementById(id);
 const wait=async(check)=>{for(let i=0;i<200;i++){if(check())return;await new Promise(r=>setTimeout(r,5));}throw Error('Timed out: '+check+'; status='+$('status').textContent);};
 const idle=()=>wait(()=>$('workspace').inert===false);
 const click=async id=>{$(id).click();await idle();};
 const input=(selector,value)=>{const e=w.document.querySelector(selector);if(e.type==='checkbox')e.checked=value;else e.value=value;e.dispatchEvent(new w.Event('input',{bubbles:true}));return e;};
 (async()=>{
- await wait(()=>!$('workspace').hidden);await idle();
+ await wait(()=>!$('workspace').hidden);await idle();assert.equal($('source').value,'imported');assert.equal(w.document.querySelectorAll('#inventory .cover-frame').length,2);assert.equal(w.document.querySelector('#inventory img').hidden,false,'Lazy cover image must occupy layout to load');await click('inventory-table-view');assert.equal(w.document.querySelectorAll('#inventory-table-body tr').length,2);await click('inventory-grid');
  $('source').value='imported';$('source').dispatchEvent(new w.Event('change'));await idle();await click('select-page');await click('prepare-selected');
  assert.equal(queue.length,2);assert.equal(w.document.querySelector('[name=condition]').value,'Good');
  assert.match(w.document.querySelector('[name=description]').value,/Scratched cabinet/);assert.doesNotMatch(w.document.querySelector('[name=description]').value,/Cash App|pickup/);
