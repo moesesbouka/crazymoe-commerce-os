@@ -8,7 +8,7 @@ const tick=()=>new Promise(r=>setTimeout(r,10));
 (async()=>{
  assert.equal((await request({type:'CM_MERCARI_PING'},{url:'https://evil.example/',tab:{id:2}})).ok,false);
  const p={requestId:'test-request',queue_id:'queue-1',revision:1,draft:{title:'Speaker',description:'Real product description.',files:[{base64:'AP8='}]}};
- assert.equal((await request({type:'CM_MERCARI_FILL',payload:p},studio)).ok,true);
+ assert.equal((await request({type:'CM_MERCARI_FILL',payload:p},studio)).ok,true);assert.equal(memory['mercari-job:7'].draft.files,undefined,'Image bytes must not consume session storage quota');
  assert.equal((await request({type:'CM_MERCARI_READY'},{url:target.url,tab:{id:8}})).job,null);
  assert.equal((await request({type:'CM_MERCARI_READY'},target)).job.queue_id,'queue-1');
  await request({type:'CM_MERCARI_PROGRESS',result:{state:'needs_attention',done:['Title']}},target);
