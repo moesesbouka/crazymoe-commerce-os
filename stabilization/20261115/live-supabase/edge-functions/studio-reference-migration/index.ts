@@ -1,0 +1,1 @@
+Deno.serve(()=>Response.json({error:"Migration completed; endpoint permanently closed"},{status:410,headers:{"Cache-Control":"no-store"}}));
