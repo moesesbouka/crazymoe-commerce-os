@@ -1,0 +1,106 @@
+{
+  "buckets": [
+    {
+      "id": "bdd-images",
+      "name": "bdd-images",
+      "type": "STANDARD",
+      "owner": null,
+      "public": true,
+      "owner_id": null,
+      "created_at": "2026-04-01T13:00:10.827807+00:00",
+      "updated_at": "2026-04-01T13:00:10.827807+00:00",
+      "file_size_limit": 5242880,
+      "versioning_status": "DISABLED",
+      "allowed_mime_types": [
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/gif"
+      ],
+      "avif_autodetection": false,
+      "lifecycle_configuration": null,
+      "lifecycle_configuration_generation": null
+    },
+    {
+      "id": "listing-images",
+      "name": "listing-images",
+      "type": "STANDARD",
+      "owner": null,
+      "public": true,
+      "owner_id": null,
+      "created_at": "2026-04-06T12:58:23.934211+00:00",
+      "updated_at": "2026-04-06T12:58:23.934211+00:00",
+      "file_size_limit": 10485760,
+      "versioning_status": "DISABLED",
+      "allowed_mime_types": [
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/gif",
+        "image/jpg"
+      ],
+      "avif_autodetection": false,
+      "lifecycle_configuration": null,
+      "lifecycle_configuration_generation": null
+    },
+    {
+      "id": "listing-photos",
+      "name": "listing-photos",
+      "type": "STANDARD",
+      "owner": null,
+      "public": false,
+      "owner_id": null,
+      "created_at": "2026-03-30T14:05:41.492359+00:00",
+      "updated_at": "2026-03-30T14:05:41.492359+00:00",
+      "file_size_limit": null,
+      "versioning_status": "DISABLED",
+      "allowed_mime_types": null,
+      "avif_autodetection": false,
+      "lifecycle_configuration": null,
+      "lifecycle_configuration_generation": null
+    },
+    {
+      "id": "studio-originals",
+      "name": "studio-originals",
+      "type": "STANDARD",
+      "owner": null,
+      "public": false,
+      "owner_id": null,
+      "created_at": "2026-11-05T02:06:30.617682+00:00",
+      "updated_at": "2026-11-05T02:06:30.617682+00:00",
+      "file_size_limit": 36700160,
+      "versioning_status": "DISABLED",
+      "allowed_mime_types": null,
+      "avif_autodetection": false,
+      "lifecycle_configuration": null,
+      "lifecycle_configuration_generation": null
+    }
+  ],
+  "objects": [
+    {
+      "bytes": 15627061,
+      "count": 129,
+      "bucket_id": "bdd-images",
+      "manifest_sha256": "9610991496fffc87224d240a1edb0b988d1ee5e3cbaa360c3485073a8de83413"
+    },
+    {
+      "bytes": 711441677,
+      "count": 9549,
+      "bucket_id": "listing-images",
+      "manifest_sha256": "b8c5a31697dcf39917efac2eec18c9146d3b94f4ecdbdc88962206d93fa0be8a"
+    },
+    {
+      "bytes": 169080,
+      "count": 2,
+      "bucket_id": "listing-photos",
+      "manifest_sha256": "a1ec3fe5235f050cc1eaf699cfc5e15d8cb5474ffa2fed8793f04c992b11fa9d"
+    },
+    {
+      "bytes": 896221346,
+      "count": 759,
+      "bucket_id": "studio-originals",
+      "manifest_sha256": "742e7cf1092fe4d50d63679cfa015fda0114ded1d29b2f661d3c78b5bd200aa5"
+    }
+  ],
+  "captured_at": "2026-11-15T05:55:15.978658+00:00"
+}

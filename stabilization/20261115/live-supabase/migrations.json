@@ -1,0 +1,416 @@
+{
+  "migrations": [
+    {
+      "version": "20260305004101",
+      "name": "normalize_status_and_fix_rls"
+    },
+    {
+      "version": "20260305004218",
+      "name": "clean_polluted_images"
+    },
+    {
+      "version": "20260305144822",
+      "name": "auto_categorize_from_title"
+    },
+    {
+      "version": "20260305151247",
+      "name": "mark_mbfb_inactive_stale"
+    },
+    {
+      "version": "20260305154812",
+      "name": "lowercase_active_status"
+    },
+    {
+      "version": "20260305154819",
+      "name": "fix_rls_lowercase_status"
+    },
+    {
+      "version": "20260307030725",
+      "name": "normalize_status_lowercase_final"
+    },
+    {
+      "version": "20260309000817",
+      "name": "normalize_status_and_reactivate"
+    },
+    {
+      "version": "20260309001007",
+      "name": "emergency_restore_active"
+    },
+    {
+      "version": "20260309001620",
+      "name": "add_published_flag_and_public_view"
+    },
+    {
+      "version": "20260309001947",
+      "name": "tighten_public_listings_view"
+    },
+    {
+      "version": "20260309133353",
+      "name": "normalize_status_casing_and_fix_view_case_insensitive"
+    },
+    {
+      "version": "20260310224128",
+      "name": "normalize_after_refresh_march10"
+    },
+    {
+      "version": "20260314223612",
+      "name": "redirect_public_listings_to_active_listings"
+    },
+    {
+      "version": "20260314224701",
+      "name": "create_admin_listings_view"
+    },
+    {
+      "version": "20260314225821",
+      "name": "categorize_all_listings_by_title"
+    },
+    {
+      "version": "20260314225911",
+      "name": "categorize_general_merchandise_second_pass"
+    },
+    {
+      "version": "20260314230715",
+      "name": "add_is_published_and_private_inventory"
+    },
+    {
+      "version": "20260314232100",
+      "name": "create_post_queue_table"
+    },
+    {
+      "version": "20260314233644",
+      "name": "add_visibility_scope_audit_fields_import_runs"
+    },
+    {
+      "version": "20260323073713",
+      "name": "create_crunch_machine_tables"
+    },
+    {
+      "version": "20260323081034",
+      "name": "add_title_and_fix_responses"
+    },
+    {
+      "version": "20260323120423",
+      "name": "tighten_crunch_rls"
+    },
+    {
+      "version": "20260324135725",
+      "name": "add_winner_to_sessions"
+    },
+    {
+      "version": "20260324225041",
+      "name": "inventory_rls_policies"
+    },
+    {
+      "version": "20260325012609",
+      "name": "add_context_to_sessions"
+    },
+    {
+      "version": "20260325022106",
+      "name": "add_conversation_threads"
+    },
+    {
+      "version": "20260401130010",
+      "name": "create_bdd_images_bucket"
+    },
+    {
+      "version": "20260402033130",
+      "name": "create_partner_agreements"
+    },
+    {
+      "version": "20260402034637",
+      "name": "add_email_to_partner_agreements"
+    },
+    {
+      "version": "20260404181219",
+      "name": "fix_bdd_images_bucket_rls"
+    },
+    {
+      "version": "20260406125823",
+      "name": "create_listing_images_bucket"
+    },
+    {
+      "version": "20260409232011",
+      "name": "fix_crazymoe_listings_status"
+    },
+    {
+      "version": "20260409232026",
+      "name": "force_fix_crazymoe_status"
+    },
+    {
+      "version": "20260409233808",
+      "name": "clear_all_crazymoe_listings"
+    },
+    {
+      "version": "20260409233821",
+      "name": "clear_crazymoe_listings_cascade"
+    },
+    {
+      "version": "20260410000602",
+      "name": "add_quantity_to_active_listings"
+    },
+    {
+      "version": "20260416125453",
+      "name": "bdd_pay_portal_analytics"
+    },
+    {
+      "version": "20260416125652",
+      "name": "bdd_pay_dashboard_read_access"
+    },
+    {
+      "version": "20261005080121",
+      "name": "publish_current_active_storefront_inventory"
+    },
+    {
+      "version": "20261027031628",
+      "name": "add_private_council_job_status"
+    },
+    {
+      "version": "20261105013911",
+      "name": "studio_private_migration_archive"
+    },
+    {
+      "version": "20261105020953",
+      "name": "studio_private_authoritative_core"
+    },
+    {
+      "version": "20261105021743",
+      "name": "studio_authenticated_api"
+    },
+    {
+      "version": "20261105024045",
+      "name": "studio_private_reference_assets"
+    },
+    {
+      "version": "20261105034133",
+      "name": "studio_member_mobile_intake"
+    },
+    {
+      "version": "20261105034612",
+      "name": "studio_cloud_worker_lease_and_proposals"
+    },
+    {
+      "version": "20261105034706",
+      "name": "schedule_studio_visual_worker"
+    },
+    {
+      "version": "20261105034946",
+      "name": "studio_research_and_references"
+    },
+    {
+      "version": "20261105035228",
+      "name": "restrict_legacy_private_tables_and_views"
+    },
+    {
+      "version": "20261105035253",
+      "name": "restore_owner_checked_legacy_admin_views"
+    },
+    {
+      "version": "20261105050130",
+      "name": "studio_verified_export_sets"
+    },
+    {
+      "version": "20261105050453",
+      "name": "studio_approval_copy_guard"
+    },
+    {
+      "version": "20261105050519",
+      "name": "studio_one_time_approved_handoff"
+    },
+    {
+      "version": "20261105055216",
+      "name": "studio_logical_backup"
+    },
+    {
+      "version": "20261105055256",
+      "name": "studio_restore_drill"
+    },
+    {
+      "version": "20261105055347",
+      "name": "studio_daily_backup_and_restore_drill"
+    },
+    {
+      "version": "20261105065659",
+      "name": "studio_observed_listing_sync"
+    },
+    {
+      "version": "20261105080346",
+      "name": "edit_verified_product_photos"
+    },
+    {
+      "version": "20261105215708",
+      "name": "corroborate_visual_identity"
+    },
+    {
+      "version": "20261106011407",
+      "name": "guard_visual_proposals_against_changed_photo_sources"
+    },
+    {
+      "version": "20261106015355",
+      "name": "revision_bound_private_render_queue"
+    },
+    {
+      "version": "20261106031122",
+      "name": "studio_render_worker_context"
+    },
+    {
+      "version": "20261106035244",
+      "name": "studio_automatic_intake_render"
+    },
+    {
+      "version": "20261106045846",
+      "name": "studio_render_progress_status"
+    },
+    {
+      "version": "20261106060125",
+      "name": "studio_safe_render_retry"
+    },
+    {
+      "version": "20261106075602",
+      "name": "legacy_listing_revision_history"
+    },
+    {
+      "version": "20261106184336",
+      "name": "catalog_evidence_workflow"
+    },
+    {
+      "version": "20261106190449",
+      "name": "studio_seller_confirm_published"
+    },
+    {
+      "version": "20261106193903",
+      "name": "reject_obsolete_carton_template"
+    },
+    {
+      "version": "20261107032958",
+      "name": "studio_reference_choices_readonly_20261106"
+    },
+    {
+      "version": "20261107033910",
+      "name": "studio_photo_identity_approval_guard_20261106"
+    },
+    {
+      "version": "20261107191611",
+      "name": "account_posting_queue"
+    },
+    {
+      "version": "20261107191709",
+      "name": "account_posting_serial_queue"
+    },
+    {
+      "version": "20261107192028",
+      "name": "account_posting_private_functions"
+    },
+    {
+      "version": "20261107192051",
+      "name": "account_posting_service_access"
+    },
+    {
+      "version": "20261107201015",
+      "name": "allow_owner_approval_with_candidates_and_any_verified_cover"
+    },
+    {
+      "version": "20261107201108",
+      "name": "manual_listing_photo_verified_append"
+    },
+    {
+      "version": "20261107211132",
+      "name": "studio_media_integrity_and_source_preservation"
+    },
+    {
+      "version": "20261107212406",
+      "name": "studio_owner_copy_suggestions"
+    },
+    {
+      "version": "20261107213318",
+      "name": "studio_selection_limit_and_ready_media"
+    },
+    {
+      "version": "20261107214332",
+      "name": "account_photo_variants"
+    },
+    {
+      "version": "20261108032844",
+      "name": "manual_notes_only_20261108"
+    },
+    {
+      "version": "20261108033344",
+      "name": "preserve_manual_copy_from_automation_20261108"
+    },
+    {
+      "version": "20261108183807",
+      "name": "retire_legacy_active_listings_anon_access_20261108"
+    },
+    {
+      "version": "20261108185216",
+      "name": "enforce_member_storage_writes_20261108"
+    },
+    {
+      "version": "20261108185334",
+      "name": "clarify_member_storage_guard_20261108"
+    },
+    {
+      "version": "20261108185441",
+      "name": "deduplicate_active_listing_member_policies_20261108"
+    },
+    {
+      "version": "20261108185533",
+      "name": "revoke_unchecked_queue_rebuild_20261108"
+    },
+    {
+      "version": "20261108190802",
+      "name": "cross_project_restore_export_stage_20261108"
+    },
+    {
+      "version": "20261111033610",
+      "name": "mercari_preparation_queue"
+    },
+    {
+      "version": "20261111175326",
+      "name": "mercari_categories_and_browser_handoff"
+    },
+    {
+      "version": "20261111175834",
+      "name": "mercari_handoff_strict_revision_validation"
+    },
+    {
+      "version": "20261111185739",
+      "name": "mercari_recover_saved_import_details"
+    },
+    {
+      "version": "20261111212801",
+      "name": "mercari_private_source_recovery"
+    },
+    {
+      "version": "20261111214020",
+      "name": "mercari_recovery_content_deduplication_and_evidence"
+    },
+    {
+      "version": "20261113003713",
+      "name": "mercari_include_studio_listed_inventory"
+    },
+    {
+      "version": "20261113014907",
+      "name": "mercari_record_posted_link_with_incomplete_shipping"
+    },
+    {
+      "version": "20261114045736",
+      "name": "mercari_prepare_saved_listing_with_identity_review_note"
+    },
+    {
+      "version": "20261114062354",
+      "name": "mercari_shortlist_and_shipping_research"
+    },
+    {
+      "version": "20261114062915",
+      "name": "mercari_inventory_review_filters"
+    },
+    {
+      "version": "20261114065317",
+      "name": "mercari_research_retries_and_expired_leases"
+    },
+    {
+      "version": "20261114065610",
+      "name": "preserve_import_status_on_metadata_edit"
+    }
+  ]
+}
