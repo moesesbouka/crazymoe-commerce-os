@@ -1,0 +1,1 @@
+Deno.serve(()=>Response.json({error:"Catalog repair completed; importer closed"},{status:410}));

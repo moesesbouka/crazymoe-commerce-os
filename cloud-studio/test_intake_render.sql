@@ -1,0 +1,33 @@
+begin;
+do $$
+declare item text:='cloud-'||gen_random_uuid()::text; owner_id uuid; photo text; selected jsonb; first_job uuid;
+begin
+ select user_id into strict owner_id from studio_core.members where enabled limit 1;
+ select sha256 into strict photo from studio_core.photo_assets where cloud_verified_at is not null and bucket='studio-originals' and bytes between 1 and 16000000 limit 1;
+ selected:=jsonb_build_array(jsonb_build_object('kind','real','sha',photo));
+ insert into studio_core.inventory(id) values(item);
+ insert into studio_core.listing_authoring(inventory_id,fields) values(item,'{"title":"Intake render transaction fixture","condition":"New"}');
+ insert into studio_core.product_identity(inventory_id,evidence) values(item,jsonb_build_object('uploaded_by',owner_id));
+ insert into studio_core.photo_selection(inventory_id,selection) values(item,selected);
+ select id into strict first_job from studio_core.jobs where inventory_id=item and kind='render';
+ if (select payload->'selection' from studio_core.jobs where id=first_job) is distinct from selected then raise exception 'Selection lost';end if;
+ update studio_core.listing_authoring set fields=fields||'{"title":"Seller changed title"}',revision=2 where inventory_id=item;
+ if (select state from studio_core.jobs where id=first_job)<>'failed' then raise exception 'Obsolete queued job retained';end if;
+ if (select count(*) from studio_core.jobs where inventory_id=item and state='queued' and payload->>'listing_revision'='2')<>1 then raise exception 'Edited revision not queued';end if;
+ update studio_core.listing_authoring set revision=2 where inventory_id=item;
+ if (select count(*) from studio_core.jobs where inventory_id=item)<>2 then raise exception 'Duplicate job';end if;
+ update studio_core.listing_authoring set status='approved',revision=3 where inventory_id=item;
+ if (select count(*) from studio_core.jobs where inventory_id=item)<>2 then raise exception 'Approved item auto-rendered';end if;
+ if (select fields->>'title' from studio_core.listing_authoring where inventory_id=item)<>'Seller changed title' then raise exception 'Seller edit overwritten';end if;
+ update studio_core.photo_selection set selection=(select jsonb_agg(selected->0) from generate_series(1,12)) where inventory_id=item;
+ update studio_core.listing_authoring set status='review',revision=4 where inventory_id=item;
+ if (select count(*) from studio_core.jobs where inventory_id=item)<>2 then raise exception 'Oversized selection queued';end if;
+ update studio_core.photo_selection set selection='[{"kind":"real","sha":"unverified"}]' where inventory_id=item;
+ update studio_core.listing_authoring set revision=5 where inventory_id=item;
+ if (select count(*) from studio_core.jobs where inventory_id=item)<>2 then raise exception 'Unverified source queued';end if;
+ update studio_core.photo_selection set selection=selected,exports_verified=true where inventory_id=item;
+ update studio_core.listing_authoring set revision=6 where inventory_id=item;
+ if (select count(*) from studio_core.jobs where inventory_id=item)<>2 then raise exception 'Existing exports requeued';end if;
+ if has_function_privilege('authenticated','studio_core.enqueue_intake_render()','EXECUTE') or has_function_privilege('anon','studio_core.enqueue_intake_render()','EXECUTE') then raise exception 'Private trigger exposed';end if;
+end $$;
+rollback;

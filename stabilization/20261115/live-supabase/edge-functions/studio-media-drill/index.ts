@@ -1,0 +1,1 @@
+Deno.serve(() => new Response(null,{status:410}));

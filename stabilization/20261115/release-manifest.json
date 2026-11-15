@@ -1,0 +1,30 @@
+{
+  "captured_at": "2026-11-15T00:50:15-05:00",
+  "github": {
+    "base_branch": "cloud-migration-20261104",
+    "base_sha": "8add7d26085085876c27acbbbe15dc033cb8686c",
+    "stabilization_branch": "stabilize-20261115"
+  },
+  "vercel": {
+    "project_id": "prj_qVXDw7lCMIWEZto2ugQMo7J7xRT9",
+    "deployment_id": "dpl_8H62opECqeRoeSWfvUTYPPToMaoT",
+    "aliases": [
+      "studio.crazymoe.com",
+      "crazymoe-marketplace-studio.vercel.app"
+    ],
+    "git_metadata": null
+  },
+  "supabase": {
+    "project_id": "sfheqjnxlkygjfohoybo",
+    "migration_head": "20261114065610"
+  },
+  "companion": {
+    "version": "2.3.0",
+    "sha256": "f373949608092e28e542dea09aecee55cd6f2c3c7d813243e0095e1a2c004d31",
+    "size_bytes": 7767,
+    "vercel_file_uid": "cd265da2ca7779093449cacb1d0880c71844f4b2"
+  },
+  "caveats": [
+    "Three deployed Python source files could not be retrieved without truncation through the deployment API; their immutable deployment file UIDs are recorded in deployment-file-manifest.json."
+  ]
+}
