@@ -1,0 +1,26 @@
+name: Stabilization contract
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [stabilize-20261115]
+
+permissions:
+  contents: read
+
+jobs:
+  mercari-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Validate Mercari contract
+        run: node stabilization/20261115/tests/mercari-contract.test.js
+      - name: Validate JavaScript syntax
+        run: |
+          find stabilization/20261115/live-vercel/src -maxdepth 1 -name '*.js' -print0 | xargs -0 -n1 node --check
+          find stabilization/20261115/companion/extracted/CrazyMoe-Mercari-Companion -maxdepth 1 -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: Validate companion manifest
+        run: test "$(node -p "require('./stabilization/20261115/companion/extracted/CrazyMoe-Mercari-Companion/manifest.json').version")" = "2.4.0"

@@ -69,7 +69,7 @@ globalThis.MercariCopy = (() => {
  }
  function defaults(draft,source) {
   const base=source.fields?.price??source.suggestions?.price;
-  return {...draft,description:description(draft.description,source),price:draft.price??price(base),condition:condition(draft.condition||source.fields?.condition),photos_confirmed:true};
+  return {...draft,description:description(draft.description,source),price:draft.price??price(base),condition:condition(draft.condition||source.fields?.condition)};
  }
  function clean(value) {
   // Remove whole promotional sentences while preserving product facts and defects.
@@ -104,7 +104,7 @@ globalThis.MercariCopy = (() => {
   const text=clean(value('description'));
   return defaults({title:value('title').trim().slice(0,80),description:text.text,
    price:price(value('price'))||value('price'),condition:condition(value('condition')),brand:brand(source),category:/[a-z]/i.test(f.category||'')?String(f.category):'',
-   shipping:structuredClone(preset||shipping()),photos:(source.photos||[]).slice(0,12),photos_confirmed:true},source);
+   shipping:structuredClone(preset||shipping()),photos:(source.photos||[]).slice(0,12)},source);
  }
  function listingText(draft) {
   const s=draft.shipping;
@@ -121,3 +121,4 @@ globalThis.MercariCopy = (() => {
  }
  return {shipping,clean,condition,brand,plainText,description,price,defaults,photoNotice,prepare,listingText,itemUrl,format};
 })();
+

@@ -10,8 +10,9 @@ globalThis.MercariBridge=(()=>{
   if(event.data?.channel==='CRAZYMOE_MERCARI_EVENT')for(const fn of handlers)fn(event.data.result);
  });
  function request(type,payload={},timeout=8000){return new Promise((resolve,reject)=>{
-  const requestId=crypto.randomUUID(),timer=setTimeout(()=>{pending.delete(requestId);reject(Error('Reload Crazy Moe Mercari Companion 2.2.0 in Chrome, then refresh this page.'));},timeout);
+  const requestId=crypto.randomUUID(),timer=setTimeout(()=>{pending.delete(requestId);reject(Error('Reload Crazy Moe Mercari Companion 2.4.0 in Chrome, then refresh this page.'));},timeout);
   pending.set(requestId,{resolve,reject,timer});window.postMessage({channel:'CRAZYMOE_MERCARI_REQUEST',requestId,type,payload},location.origin);
  });}
  return {request,onResult:fn=>handlers.add(fn)};
 })();
+
