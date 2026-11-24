@@ -5,6 +5,9 @@ const get = id => document.getElementById(id);
 const form = get("edit-form");
 const fields = ["title", "price", "condition", "model", "description", "source_url", "notes"];
 const auth = studioAuth.auth;
+const MAX_INTAKE_PHOTOS = 100;
+const LISTING_PHOTO_LIMIT = 10;
+const MAX_INTAKE_PHOTO_BYTES = 16 * 1024 * 1024;
 let session, current, saving = false, items = [], view = "all", photoRequest = 0;
 let thumbnailGeneration = 0;
 const selectedItems = new Set();
@@ -470,30 +473,51 @@ get("close").onclick = () => {if(canLeave()) get("editor").close();};
 get("editor").oncancel = event => {if(!canLeave()) event.preventDefault();};
 get("editor").onclose=()=>{if(get("editor").open)return;stopRenderStatus();++photoRequest;reviewQueue=null;};
 let uploadBatch;
-get("files").onchange = () => {uploadBatch = crypto.randomUUID();};
+async function sha256Hex(value) {
+  return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",value)),
+    byte => byte.toString(16).padStart(2,"0")).join("");
+}
+get("files").onchange = () => {
+  uploadBatch = crypto.randomUUID();
+  const photos = Array.from(get("files").files), message = get("upload-status");
+  if (!photos.length) message.textContent = "Choose product photos to begin.";
+  else if (photos.length > MAX_INTAKE_PHOTOS)
+    message.textContent = photos.length + " selected. Choose up to " + MAX_INTAKE_PHOTOS + " photos per intake batch.";
+  else if (photos.some(file => file.size > MAX_INTAKE_PHOTO_BYTES))
+    message.textContent = "One or more photos exceed 16 MB. Originals under 16 MB are accepted.";
+  else message.textContent = photos.length + " photos selected. Every original will be saved; up to " +
+    LISTING_PHOTO_LIMIT + " will be prepared for the listing gallery.";
+};
 if (location.pathname.startsWith("/app")) get("upload").open = true;
 get("upload-form").onsubmit = async event => {
   event.preventDefault();
   const picker = get("files"), button = event.currentTarget.querySelector("button");
   const photos = Array.from(picker.files), message = get("upload-status");
-  if (!photos.length || photos.length > 10 || photos.some(file => file.size > 16*1024*1024)) {
-    message.textContent = "Choose up to 10 photos, each 16 MB or smaller."; return;
+  if (!photos.length || photos.length > MAX_INTAKE_PHOTOS || photos.some(file => file.size > MAX_INTAKE_PHOTO_BYTES)) {
+    message.textContent = photos.length > MAX_INTAKE_PHOTOS
+      ? photos.length + " selected. Choose up to " + MAX_INTAKE_PHOTOS + " photos per intake batch."
+      : "Choose one or more photos, each 16 MB or smaller.";
+    return;
   }
   button.disabled = picker.disabled = true;
-  // Keep the idempotency key across reconnect/reload; only hashes and a batch ID.
-  let uploadKey;
+  // Hash sequentially so a 60+ photo batch never loads every original into
+  // memory at once. The compact batch fingerprint survives reconnect/retry.
+  let uploadKey, prepared = [];
   try {
-    const hashes=await Promise.all(photos.map(async file=>[...new Uint8Array(await crypto.subtle.digest("SHA-256",await file.arrayBuffer()))].map(v=>v.toString(16).padStart(2,"0")).join("")));
-    uploadKey="studio-upload:"+session.user.id+":"+hashes.join(":");
+    for (const [index,file] of photos.entries()) {
+      message.textContent = "Preparing original " + (index+1) + " of " + photos.length + "…";
+      const sha = await sha256Hex(await file.arrayBuffer());
+      if (!prepared.some(entry => entry.sha === sha)) prepared.push({file,sha});
+    }
+    const fingerprint = await sha256Hex(new TextEncoder().encode(prepared.map(entry => entry.sha).join(":")));
+    uploadKey="studio-upload:"+session.user.id+":"+fingerprint;
     uploadBatch=sessionStorage.getItem(uploadKey)||crypto.randomUUID();
     sessionStorage.setItem(uploadKey,uploadBatch);
   } catch(error){message.textContent="Unable to initialize upload: "+error.message;button.disabled=picker.disabled=false;return;}
   try {
     const manifest = [];
-    for (const file of photos) {
-      message.textContent = "Uploading photo " + (manifest.length+1) + " of " + photos.length + "…";
-      const digest = await crypto.subtle.digest("SHA-256",await file.arrayBuffer());
-      const sha = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2,"0")).join("");
+    for (const {file,sha} of prepared) {
+      message.textContent = "Saving original " + (manifest.length+1) + " of " + prepared.length + "…";
       const path = "/storage/v1/object/studio-originals/incoming/" + session.user.id + "/" + uploadBatch + "/" + sha;
       const {data:authData,error:authError}=await auth.getSession();
       if(authError)throw authError;
@@ -509,7 +533,10 @@ get("upload-form").onsubmit = async event => {
     }
     message.textContent = "Verifying originals…";
     const completed = await request("/functions/v1/studio-api/intake",{method:"POST",body:JSON.stringify({batch:uploadBatch,files:manifest})});
-    message.textContent = "Added product " + completed.id;
+    const sourceCount = completed.source_count || manifest.length;
+    const selectedCount = completed.selected_count || Math.min(sourceCount, LISTING_PHOTO_LIMIT);
+    message.textContent = "Added product " + completed.id + ". Saved " + sourceCount +
+      " originals; " + selectedCount + " prepared for the listing gallery.";
     picker.value = ""; sessionStorage.removeItem(uploadKey); uploadBatch = null;
     await refresh();
     const item = items.find(product => product.id===completed.id);

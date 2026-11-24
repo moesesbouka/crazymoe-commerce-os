@@ -1,6 +1,8 @@
 import { createClient } from "npm:@supabase/supabase-js@2.119.0";
 
 const origins = new Set(["https://studio.crazymoe.com", "https://crazymoe-marketplace-studio.vercel.app", "https://crazymoe-marketplace-studio-moe-boukas-projects.vercel.app"]);
+const MAX_INTAKE_PHOTOS = 100;
+const MAX_INTAKE_MANIFEST_BYTES = 128 * 1024;
 function jpegDimensions(bytes: Uint8Array): {width:number,height:number}|null {
   let offset=2;
   while(offset+4<=bytes.length){
@@ -53,10 +55,10 @@ Deno.serve(async (req: Request) => {
     }
     if (path === "intake" && req.method === "POST") {
       const raw = await req.text();
-      if (raw.length > 8192) return reply({error:"Manifest too large"},413);
+      if (raw.length > MAX_INTAKE_MANIFEST_BYTES) return reply({error:"Manifest too large"},413);
       const {batch, files} = JSON.parse(raw);
       if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(batch)
-        || !Array.isArray(files) || files.length < 1 || files.length > 10) return reply({error:"Invalid upload batch"},400);
+        || !Array.isArray(files) || files.length < 1 || files.length > MAX_INTAKE_PHOTOS) return reply({error:"Invalid upload batch"},400);
       const admin = createClient(url,Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,{auth:{persistSession:false}});
       const userId = verified.data.user.id;
       const checked = [];
@@ -76,7 +78,7 @@ Deno.serve(async (req: Request) => {
       }
       const result = await admin.rpc("studio_finish_intake",{p_user:userId,p_batch:batch,p_files:checked});
       if (result.error) return failure(result.error);
-      return reply({id:result.data});
+      return reply({id:result.data,source_count:checked.length,selected_count:Math.min(checked.length,10)});
     }
     if (path === "add-photo" && req.method === "POST") {
       const raw = await req.text();
