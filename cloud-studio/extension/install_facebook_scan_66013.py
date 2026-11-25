@@ -78,7 +78,9 @@ def patch_scraper(source):
 
 def build(extension, baseline):
     source_names = (*BASELINE, "background.js")
-    original = {name: (baseline / name).read_bytes() for name in source_names}
+    backed_up = {"manifest.json", "fb_scraper.js", "background.js"}
+    original = {name: ((baseline if name in backed_up else extension) / name).read_bytes()
+                for name in source_names}
     for name, digest in {**BASELINE, "background.js": BACKGROUND_SHA}.items():
         if hashlib.sha256(original[name]).hexdigest() != digest:
             raise RuntimeError(f"Wrong 66.0.11 baseline for {name}")
