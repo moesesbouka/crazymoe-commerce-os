@@ -14,7 +14,7 @@
   const labels = {
     active: "Active", posted: "Posted", stale: "Needs rescan", inactive: "Inactive",
     sold: "Sold", needs_details: "Needs details", ready: "Ready",
-    handed_off: "Form filled", cancelled: "Removed", skipped: "Skipped",
+    handed_off: "Ready for manual listing", cancelled: "Removed", skipped: "Skipped",
     source_unavailable: "Source unavailable", published: "Published"
   };
 
@@ -209,7 +209,7 @@
     const query = new URLSearchParams();
     if (form.elements.view.value !== "all") query.set("view", form.elements.view.value);
     if (form.elements.query.value.trim()) query.set("q", form.elements.query.value.trim());
-    history.replaceState(null, "", query.size ? "?" + query : location.pathname);
+    history.replaceState(null, "", query.toString() ? "?" + query : location.pathname);
     load();
   }
 

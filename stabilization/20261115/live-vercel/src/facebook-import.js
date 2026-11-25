@@ -44,9 +44,25 @@ window.StudioChannels = (() => {
     discovering: "Finding Facebook listings",
     saving: "Saving listing observations",
     completed: "Scan complete",
+    partial: "Partial scan",
     stopped: "Scan stopped",
     failed: "Scan failed",
     interrupted: "Scanner disconnected"
+  };
+  const endText = {
+    end_of_feed: "Facebook confirmed the end of the listings feed.",
+    verified_empty: "Facebook confirmed that this selling feed is empty.",
+    page_cap: "The page limit was reached. The saved results cover only part of the catalog.",
+    failed: "The scanner could not verify the listings feed."
+  };
+  const errorText = {
+    FACEBOOK_HTTP: "Facebook returned an HTTP error.",
+    FACEBOOK_NETWORK: "The connection to Facebook was interrupted.",
+    FACEBOOK_TIMEOUT: "A Facebook listings page timed out.",
+    FACEBOOK_RESPONSE: "Facebook returned an unreadable listings response.",
+    FACEBOOK_CURSOR: "Facebook listing pagination could not continue.",
+    FACEBOOK_IDENTITY: "The signed-in Facebook profile could not be verified.",
+    STUDIO_ERROR: "Studio could not complete this scan."
   };
   const trigger = element("button", undefined, "cm-import-trigger");
   trigger.type = "button";
@@ -74,7 +90,7 @@ window.StudioChannels = (() => {
         <dl class="import-counts">
           <div><dt>Found</dt><dd data-count="found"></dd></div>
           <div><dt>Refreshed</dt><dd data-count="refreshed"></dd></div>
-          <div><dt>For review</dt><dd data-count="pending"></dd></div>
+          <div><dt>New for review</dt><dd data-count="pending"></dd></div>
           <div><dt>Skipped</dt><dd data-count="skipped"></dd></div>
         </dl>
       </div>
@@ -125,7 +141,11 @@ window.StudioChannels = (() => {
       item.account_tag + " · " + (stateText[item.state] || item.state) + " · " + new Date(item.started_at).toLocaleString(), item.id
     )));
     options.value = run.id;
-    const stateLabel = run.account_tag + " · " + (stateText[run.state] || run.state);
+    const stateLabel = [
+      run.account_tag, stateText[run.state] || run.state,
+      run.pages ? run.pages + (run.pages === 1 ? " page" : " pages") : "",
+      run.scanner_version ? "Scanner " + run.scanner_version : ""
+    ].filter(Boolean).join(" · ");
     if (find("state").textContent !== stateLabel) find("state").textContent = stateLabel;
     const discoveryFinished = !!run.saving_at;
     find("discover").textContent = discoveryFinished ? "Listings found" : running(run) ? "Finding listings…" : "Listing discovery ended";
@@ -137,7 +157,9 @@ window.StudioChannels = (() => {
     for (const count of dialog.querySelectorAll("[data-count]")) count.textContent = Number(run[count.dataset.count]).toLocaleString();
     find("note").textContent = running(run)
       ? "You can close this window or leave Studio. Keep the Facebook selling tab open while the scan runs."
-      : "Refreshed listings keep your saved edits. New observations are held for review.";
+      : errorText[run.error_code] || endText[run.end_reason] ||
+        (run.state === "partial" ? "This run has no verified completion record." :
+          "Refreshed listings keep your saved edits. New observations are held for review.");
     elapsed();
   }
 

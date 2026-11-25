@@ -2,7 +2,7 @@ name: Stabilization contract
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, fix/mercari-manual-handoff]
   push:
     branches: [stabilize-20261115]
 
@@ -24,3 +24,16 @@ jobs:
           find stabilization/20261115/companion/extracted/CrazyMoe-Mercari-Companion -maxdepth 1 -name '*.js' -print0 | xargs -0 -n1 node --check
       - name: Validate companion manifest
         run: test "$(node -p "require('./stabilization/20261115/companion/extracted/CrazyMoe-Mercari-Companion/manifest.json').version")" = "2.4.0"
+
+  facebook-scan-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Verify the scanner and release health
+        run: node --test cloud-studio/extension/test_facebook_scan.cjs stabilization/20261125/tests/studio-release-health.cjs
+      - name: Verify the migration and inventory against PostgreSQL fixtures
+        run: |
+          npm install --prefix "$RUNNER_TEMP/studio-pg" --no-audit --no-fund @electric-sql/pglite@0.3.15
+          STUDIO_PGLITE_MODULE="$RUNNER_TEMP/studio-pg/node_modules/@electric-sql/pglite" node stabilization/20261125/tests/facebook-scan-sql.cjs
