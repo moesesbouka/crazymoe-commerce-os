@@ -1,0 +1,31 @@
+{
+  "deployment_id": "dpl_8H62opECqeRoeSWfvUTYPPToMaoT",
+  "files": {
+    ".python-version": "2c561ed018185a0ab382c0d28e718aa1debe8756",
+    "api/process_render.py": "93d36786b307888ecc1f21de08fc0575eb7260b3",
+    "api/render.py": "886cbc729633c6ca462be4cca241a94704db6fc3",
+    "index.html": "c6a1c264c46686b4caf77905690a96497d8864a5",
+    "auth.js": "f2b416c10858beec1f645a3a04570ec27f085988",
+    "media.js": "a406bf629998c7bd96ea0d3ef05528121541d9a5",
+    "mercari-bridge.js": "a97e8f6d880d355da86719fbaf049a654e8fe66e",
+    "mercari-categories.js": "fe87d3a9a096a84be0c6dcadb9507e15d613c6df",
+    "mercari-companion.zip": "cd265da2ca7779093449cacb1d0880c71844f4b2",
+    "mercari-copy.js": "950040f6b8d46eb1379dc9932b1690b9a46b950f",
+    "mercari.css": "d81dfd3c1034029cfae7f577d5f1f1b1980eef94",
+    "mercari.html": "9ed609b003d7bf4608e79e405e923de15f6a177a",
+    "mercari.js": "59d532c9dea682965007f09909b5beb0376c9286",
+    "posting-copy.js": "b869949aac2c19e37df18eac84c2c457902eed3d",
+    "posting-photo.js": "af452d912bf1fbc640b5878c8113d8bc0cad8aeb",
+    "posting.css": "4d99b80b4428253f66049e81afccdd9d543bd4cc",
+    "posting.html": "8f03fd68f1d75dacedfad7e4e0add5d39b7d116b",
+    "posting.js": "d851be359a91a71bb2a84308f39e6ad0cc242821",
+    "render-status.js": "d9d06f04ba4cf8461f24c4650abe267e8b3b348f",
+    "renderer.py": "4ed21aeb0e996bf6e75053883dde0369cf6ce506",
+    "requirements.txt": "b3d7f3238a68baaed90673ded9035d221c695bb5",
+    "studio.css": "aed5263c77e50571a9ed7e9969e9a867eea7b183",
+    "studio.js": "d0ba45da44e5c8a66a8031ebf8136bf172ed8c7b",
+    "vercel.json": "628970d567b8aa00d772fc13e4d67526efb30733",
+    "workflows.js": "672eaadc4aca276f368fe1340e75279a8cb7bf4d",
+    "workspace.css": "06d13553e4e147ea1c3c16c0aa9edc70481a3cdf"
+  }
+}
