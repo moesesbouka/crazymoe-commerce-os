@@ -222,7 +222,10 @@ $('rebuild').onclick=()=>action(async()=>{
 });
 window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue='';}});
 auth.onAuthStateChange(event=>{if(event==='SIGNED_OUT'){sessionEpoch++;clearPhotos();queue=[];inventory=[];presets=[];selected.clear();current=null;dirty=false;$('workspace').hidden=true;$('login-note').hidden=false;for(const id of ['inventory','queue-list','photos','presets-list'])$(id).replaceChildren();status('Signed out. Sign in to use your private queue.');}});
-async function initialize(){await auth.initialize();const {data}=await auth.getSession();if(!data.session){$('login-note').hidden=false;status('Sign in with your existing Studio account.');return;}await loadState();await loadCatalog();$('catalog-view').value=catalog.enabled?'kept':'all';await loadCategories();await loadInventory();checkCompanion();$('login-note').hidden=true;$('workspace').hidden=false;view('browse');status('Choose products to prepare, or continue your saved Mercari queue.');}
+async function initialize(){await auth.initialize();const {data}=await auth.getSession();if(!data.session){$('login-note').hidden=false;status('Sign in with your existing Studio account.');return;}await loadState();await loadCatalog();$('catalog-view').value=catalog.enabled?'kept':'all';await loadCategories();await loadInventory();checkCompanion();$('login-note').hidden=true;$('workspace').hidden=false;const requested=new URLSearchParams(location.search).get('queue');
+ if(requested&&queue.some(item=>item.id===requested)){view('queue');open(requested);}
+ else{view('browse');status(requested?'This queue item is no longer available.':'Choose products to prepare, or continue your saved Mercari queue.');}
+}
 $('retry-login').onclick=()=>action(initialize);
 shippingFields($('preset-shipping'),MercariCopy.shipping());action(initialize);
 

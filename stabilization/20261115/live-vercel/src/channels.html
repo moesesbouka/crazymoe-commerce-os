@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Channel inventory · Crazy Moe</title>
+  <link rel="stylesheet" href="/channels.css">
+  <script src="/auth.js" defer></script>
+  <script src="/facebook-import.js" defer></script>
+  <script src="/channels.js" defer></script>
+</head>
+<body class="channel-page">
+<header class="channel-header">
+  <a class="channel-brand" href="/"><b>CM</b><span>CRAZY MOE<small>LISTING STUDIO</small></span></a>
+  <nav aria-label="Studio">
+    <a href="/">Studio</a>
+    <a href="/channels.html" aria-current="page">Channel inventory</a>
+    <a href="/posting.html">Facebook queue</a>
+    <a href="/mercari.html">Mercari desk</a>
+    <a href="/health.html">System health</a>
+  </nav>
+  <span data-facebook-import></span>
+</header>
+<main class="channel-main">
+  <div class="channel-heading">
+    <h1>Channel inventory</h1>
+    <button type="button" class="channel-button" id="channel-refresh" hidden>Refresh</button>
+  </div>
+  <p id="channel-message" class="channel-message" role="status">Checking your Studio sign-in…</p>
+  <a class="channel-button" id="channel-signin" href="/?return=channels" hidden>Sign in to Studio</a>
+  <section id="channel-inventory" hidden aria-label="Inventory">
+    <form class="channel-filters" id="channel-filters" role="search">
+      <label>View
+        <select name="view">
+          <option value="all">Current inventory</option>
+          <option value="fix">Needs fixing</option>
+          <option value="duplicates">Possible duplicates</option>
+          <option value="stale">Stale Facebook listings</option>
+          <option value="mercari">Mercari shortlist</option>
+          <option value="history">Facebook history</option>
+        </select>
+      </label>
+      <label>Search inventory
+        <input type="search" name="query" maxlength="200" placeholder="Product name or inventory ID">
+      </label>
+      <button type="submit" class="channel-button">Search</button>
+    </form>
+    <div class="channel-table-wrap" role="region" aria-label="Channel listings" tabindex="0">
+      <table class="channel-table">
+        <thead id="channel-columns"></thead>
+        <tbody id="channel-rows"></tbody>
+      </table>
+    </div>
+    <div class="channel-pages">
+      <button type="button" class="channel-button" id="channel-prev" disabled>Previous</button>
+      <span id="channel-range"></span>
+      <button type="button" class="channel-button" id="channel-next" disabled>Next</button>
+    </div>
+  </section>
+</main>
+</body>
+</html>

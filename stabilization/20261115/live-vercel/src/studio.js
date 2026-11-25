@@ -184,6 +184,13 @@ async function refresh() {
 }
 function notice(message) { get("message").hidden = !message; get("message").textContent = message; }
 async function openWorkspace(authSession) {
+  const returnRequested = new URLSearchParams(location.search).get("return") === "channels";
+  const returnExpires = Number(localStorage.getItem("studio-return-channels"));
+  if (returnRequested || returnExpires > Date.now()) {
+    localStorage.removeItem("studio-return-channels");
+    location.replace("/channels.html");
+    return;
+  }
   session = authSession;
   await refresh();
   await connectStudioExtension();
@@ -202,6 +209,9 @@ get("email-signin").onsubmit = async event => {
       options:{shouldCreateUser:false, emailRedirectTo:location.origin + "/app/"}
     });
     if (error) throw error;
+    if (new URLSearchParams(location.search).get("return") === "channels") {
+      localStorage.setItem("studio-return-channels", String(Date.now() + 15 * 60 * 1000));
+    }
     get("login-status").textContent = "Check your email and click the newest sign-in link to open Studio.";
   } catch(error) {
     get("login-status").textContent = error.message;
