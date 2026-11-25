@@ -1,19 +1,16 @@
 'use strict';
 const $=id=>document.getElementById(id),auth=studioAuth.auth;
 const backend='https://sfheqjnxlkygjfohoybo.supabase.co',publicKey='sb_publishable_xfIVDlnktUiJYm5U_1jEtw_Res600Af';
-const STUDIO_BUILD='stabilize-20261115',COMPANION_VERSION='2.4.0',POLICY_VERSION='mercari-2026-11-15.1';
 const form=$('listing-form'),names=['title','description','price','condition','category','brand'];
-const labels={needs_details:'Needs details',ready:'Ready',handed_off:'Form filled',posted:'Posted',sold:'Sold',cancelled:'Removed',source_unavailable:'Source unavailable',skipped:'Skipped'};
+const labels={needs_details:'Needs details',ready:'Ready',handed_off:'Ready for manual listing',posted:'Posted',sold:'Sold',cancelled:'Removed',source_unavailable:'Source unavailable',skipped:'Skipped'};
 let inventory=[],queue=[],presets=[],selected=new Map(),page=0,total=0,current=null,dirty=false,busy=false,sessionEpoch=0;
 let photoRows=[],photoEpoch=0,photoUrls=new Set();
-let inventoryAll=[],inventoryLayout='grid',categoryPaths=[],pendingHandoff=new Map();
+let inventoryAll=[],inventoryLayout='grid',categoryPaths=[];
 const inventoryCache=new Map();
 let catalog={enabled:false,choices:[],research:[]};
 const itemKey=i=>i.source_kind+':'+i.source_id;
-const ready=q=>q?.state==='ready'&&q?.readiness?.ready===true&&!q.stale&&q.available&&q.eligible!==false;
-const semver=value=>String(value||'').split('.').map(n=>Number(n));
-const companionCompatible=value=>{const [major,minor,patch]=semver(value),[needMajor,needMinor,needPatch]=semver(COMPANION_VERSION);return major===needMajor&&(minor>needMinor||(minor===needMinor&&patch>=needPatch));};
-async function recordEvent(actionName,resultCode,details={}){try{await rpc('studio_record_client_event',{p_event:{correlation_id:details.correlation_id||crypto.randomUUID(),surface:'mercari_web',action:actionName,result_code:resultCode,issue_codes:details.issue_codes||[],queue_id:details.queue_id||null,revision:details.revision??null,companion_version:details.companion_version||null,studio_build:STUDIO_BUILD,duration_ms:details.duration_ms??null}});}catch{}}
+const ready=q=>['ready','handed_off'].includes(q?.state)&&q?.readiness?.ready===true&&!q.listing_url&&!q.stale&&q.available&&q.eligible!==false;
+const editable=q=>!['handed_off','posted','sold','cancelled','source_unavailable','skipped'].includes(q.state);
 async function loadCatalog(){catalog=await rpc('studio_mercari_catalog');renderResearch();renderQueue();}
 function renderResearch(){const counts={};for(const j of catalog.research||[])counts[j.state]=(counts[j.state]||0)+1;$('research-summary').textContent=Object.entries(counts).map(([k,v])=>v+' '+k.replaceAll('_',' ')).join(' · ')||'Research starts after you save your Mercari selection.';$('research-summary').textContent+=' · '+(catalog.worker_seen_at&&Date.now()-Date.parse(catalog.worker_seen_at)<120000?'Lenovo AI connected':'Lenovo AI offline or reconnecting');}
 async function catalogAction(action){if(!selected.size)throw Error('Select the products first.');catalog=await rpc('studio_mercari_catalog',{p_action:action,p_items:[...selected.values()].map(i=>({source_kind:i.source_kind,source_id:i.source_id}))});selected.clear();$('catalog-view').value='kept';page=0;renderInventory();renderQueue();renderResearch();if(action!=='exclude'){catalog=await rpc('studio_mercari_catalog',{p_action:'research'});renderResearch();}status('Mercari selection saved. Other inventory is preserved; use All products or Excluded products to restore items.');}
@@ -61,13 +58,13 @@ async function photoBytes(photo){
  MercariCopy.format(photo,bytes);return bytes;
 }
 function renderPhotos(){
- clearPhotos();const epoch=photoEpoch,container=$('photos');container.replaceChildren();
+ clearPhotos();const epoch=photoEpoch,container=$('photos'),locked=!editable(current);container.replaceChildren();
  photoRows.forEach((row,index)=>{
   const card=node('div',undefined,'photo'),img=node('img');img.alt='Product photo '+(index+1);img.loading='lazy';
-  const actions=node('div',undefined,'photo-actions'),l=node('label'),check=node('input');check.type='checkbox';check.checked=row.checked;check.disabled=['posted','sold','cancelled'].includes(current.state);
+  const actions=node('div',undefined,'photo-actions'),l=node('label'),check=node('input');check.type='checkbox';check.checked=row.checked;check.disabled=locked;
   check.onchange=()=>{row.checked=check.checked;change();};l.append(check,node('span',index===0?'Cover':'Use'));
   actions.append(l);
-  for(const [delta,label] of [[-1,'←'],[1,'→']]){const b=node('button',label);b.type='button';b.setAttribute('aria-label',`Move photo ${index+1} ${delta<0?'earlier':'later'}`);b.disabled=index+delta<0||index+delta>=photoRows.length||['posted','sold','cancelled'].includes(current.state);b.onclick=()=>{const moved=photoRows.splice(index,1)[0];photoRows.splice(index+delta,0,moved);change();renderPhotos();};actions.append(b);}
+  for(const [delta,label] of [[-1,'←'],[1,'→']]){const b=node('button',label);b.type='button';b.setAttribute('aria-label',`Move photo ${index+1} ${delta<0?'earlier':'later'}`);b.disabled=locked||index+delta<0||index+delta>=photoRows.length;b.onclick=()=>{const moved=photoRows.splice(index,1)[0];photoRows.splice(index+delta,0,moved);change();renderPhotos();};actions.append(b);}
   card.append(img,actions);container.append(card);
   photoBytes(row.photo).then(bytes=>{if(epoch!==photoEpoch)return;const url=URL.createObjectURL(new Blob([bytes],{type:'image/'+MercariCopy.format(row.photo,bytes).replace('jpg','jpeg')}));photoUrls.add(url);img.src=url;}).catch(()=>{if(epoch===photoEpoch){img.hidden=true;card.prepend(node('p','Preview unavailable','hint'));}});
  });
@@ -112,11 +109,12 @@ function open(id){
  for(const p of q.source_snapshot.photos||[])if(!q.draft.photos.some(selected=>JSON.stringify(selected)===JSON.stringify(p)))photoRows.push({photo:p,checked:false});
  shippingFields($('shipping-fields'),q.draft.shipping,change);
  const research=catalog.research.find(j=>j.source_kind===q.source_kind&&j.source_id===q.source_id),note=$('shipping-research-note');note.replaceChildren();if(research){note.append(node('span','AI research: '+research.state.replaceAll('_',' ')+'. '+(research.result?.summary||'')));for(const e of research.result?.evidence||[]){const url=String(e.url||'');if(!/^https:\/\//i.test(url))continue;const a=node('a',' Source: '+(e.title||new URL(url).hostname));a.href=url;a.target='_blank';a.rel='noopener noreferrer';note.append(a);}if(research.result?.item_weight_oz)note.append(node('span',' Item weight: '+research.result.item_weight_oz+' oz.'));}
- const closed=['handed_off','posted','sold','cancelled','source_unavailable','skipped'].includes(q.state);$('auto-fill').disabled=!ready(q);
+ const closed=!editable(q);$('suggest-category').disabled=closed;
  for(const input of form.querySelectorAll('input,textarea,select'))input.disabled=closed;
  $('save-draft').disabled=closed;$('apply-preset').disabled=closed;$('save-state').textContent=dirty?'Automatic details added — save to keep':'Saved';
  $('download-pack').disabled=!ready(q);
- $('listing-url').disabled=!['ready','handed_off'].includes(q.state)||q.readiness?.ready!==true;$('listing-url').value=q.listing_url||'';publicationControls();
+ $('open-sell').hidden=$('manual-listing-note').hidden=!ready(q);
+ $('listing-url').disabled=!ready(q);$('listing-url').value=q.listing_url||'';publicationControls();
  $('publication').hidden=['sold','cancelled'].includes(q.state);$('published-link').hidden=!q.listing_url;if(q.listing_url)$('published-link').href=q.listing_url;
  $('done-next').hidden=q.state==='posted';$('mark-sold').hidden=['sold','cancelled'].includes(q.state);$('cancel-item').hidden=!['ready','needs_details'].includes(q.state);$('sold-note').hidden=q.state!=='sold';
  renderPhotos();counts();renderQueue();
@@ -127,8 +125,8 @@ async function save(){
  await rpc('studio_mercari_update',{p_id:id,p_revision:current.revision,p_action:'save',p_draft:draft()});dirty=false;
  await loadState();open(id);status('Listing saved. '+(current.state==='ready'?'Ready to list on Mercari.':'Complete the highlighted details when ready.'));
 }
-function next(after){const rows=queue.filter(q=>kept(q)&&['ready','needs_details'].includes(q.state));const position=rows.findIndex(q=>q.id===after);return rows[position+1]?.id||rows.find(q=>q.id!==after)?.id||null;}
-function publicationControls(){$('done-next').disabled=!current||!['ready','handed_off'].includes(current.state)||current.readiness?.ready!==true||current.stale||!current.available||current.eligible===false||!MercariCopy.itemUrl($('listing-url').value.trim());}
+function next(after){const rows=queue.filter(q=>kept(q)&&['ready','needs_details','handed_off'].includes(q.state));const position=rows.findIndex(q=>q.id===after);return rows[position+1]?.id||rows.find(q=>q.id!==after)?.id||null;}
+function publicationControls(){$('done-next').disabled=!ready(current)||!MercariCopy.itemUrl($('listing-url').value.trim());}
 $('listing-url').oninput=publicationControls;
 async function loadInventory(){
  const kind=$('source').value,cached=inventoryCache.get(kind);
@@ -176,13 +174,16 @@ function renderInventory(){
  $('page-info').textContent=total?`${page*24+1}–${Math.min((page+1)*24,total)} of ${total}`:'0 products';$('previous-page').disabled=page===0;$('next-page').disabled=(page+1)*24>=total;
 }
 async function downloadPack(){
- await save();const epoch=sessionEpoch,id=current.id;
+ await save();
+ if(!ready(current))throw Error('Choose a ready, unposted item first.');
+ const epoch=sessionEpoch,id=current.id;
  const q=await rpc('studio_mercari_update',{p_id:id,p_revision:current.revision,p_action:'download'}),entries=[{name:'listing.txt',data:MercariCopy.listingText(q.draft)}];let totalBytes=0;
  for(const [i,photo] of q.draft.photos.entries()){
   status(`Downloading photo ${i+1} of ${q.draft.photos.length}…`);const bytes=await photoBytes(photo);if(epoch!==sessionEpoch)throw Error('Signed out. Download stopped.');totalBytes+=bytes.length;if(totalBytes>150*1024*1024)throw Error('This photo pack is too large. Select fewer photos.');entries.push({name:`photos/${String(i+1).padStart(2,'0')}.${MercariCopy.format(photo,bytes)}`,data:bytes});
  }
  await rpc('studio_mercari_update',{p_id:id,p_revision:q.revision,p_action:'download'});
- const url=URL.createObjectURL(studioWorkflows.zip(entries)),a=node('a');a.href=url;a.download='CrazyMoe-Mercari-'+q.source_kind+'-'+q.source_id+'.zip';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);status('Listing pack downloaded. Extract the ZIP, then attach its ordered photos in Mercari.');
+ if(epoch!==sessionEpoch)throw Error('Signed out. Download stopped.');
+ const url=URL.createObjectURL(studioWorkflows.zip(entries)),a=node('a');a.href=url;a.download='CrazyMoe-Mercari-'+q.source_kind+'-'+q.source_id+'.zip';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);status('Listing pack downloaded. Extract the ZIP and attach the photos in the fresh Mercari form.');
 }
 form.noValidate=true;form.onsubmit=e=>{e.preventDefault();action(save);};form.oninput=change;
 function formatDescription(){const input=form.elements.description;if(!current||!['ready','needs_details'].includes(current.state))return;const formatted=MercariCopy.description(input.value,current.source_snapshot);if(input.value!==formatted){input.value=formatted;change();}}
@@ -206,7 +207,16 @@ $('apply-preset').onclick=()=>{const p=presets.find(p=>p.id===$('editor-preset')
 $('preset-form').onsubmit=e=>{e.preventDefault();action(async()=>{await rpc('studio_mercari_preset',{p_name:e.target.elements.name.value.trim(),p_shipping:readShipping($('preset-shipping'))});await loadState();status('Shipping preset saved. Choose it when preparing a batch or editing a listing.');});};
 $('refresh-queue').onclick=()=>action(async()=>{await save();const id=current?.id;await loadCatalog();await loadState();open(id&&queue.some(q=>q.id===id&&kept(q))?id:next(null));status('Queue refreshed.');});$('queue-filter').onchange=renderQueue;
 $('skip-item').onclick=()=>action(async()=>{const id=current?.id;await save();open(next(id));status('Progress saved. Next product loaded.');});
-$('done-next').onclick=()=>action(async()=>{const enteredUrl=$('listing-url').value.trim();await save();const id=current.id,url=MercariCopy.itemUrl(enteredUrl);if(!url)throw Error('Paste the published Mercari item link.');await rpc('studio_mercari_update',{p_id:id,p_revision:current.revision,p_action:'posted',p_url:url});await loadState();open(next(id));status('Posted link recorded. Next product loaded.');});
+$('done-next').onclick=()=>action(async()=>{
+ const url=MercariCopy.itemUrl($('listing-url').value.trim());
+ if(!url)throw Error('Paste the published Mercari item link.');
+ await save();
+ if(!ready(current))throw Error('Choose a ready, unposted item first.');
+ const id=current.id;
+ if(queue.some(q=>q.id!==id&&MercariCopy.itemUrl(q.listing_url)===url))throw Error('This Mercari link is already recorded for another item in your queue.');
+ await rpc('studio_mercari_update',{p_id:id,p_revision:current.revision,p_action:'posted',p_url:url});
+ await loadState();open(next(id));status('Posted link recorded. Next product loaded.');
+});
 $('mark-sold').onclick=()=>action(async()=>{await save();const id=current.id;await rpc('studio_mercari_update',{p_id:id,p_revision:current.revision,p_action:'sold'});await loadState();open(next(id));status('Marked sold in your Mercari queue. Update any other live listings for this product.');});
 $('cancel-item').onclick=()=>action(async()=>{const id=current.id;await rpc('studio_mercari_update',{p_id:id,p_revision:current.revision,p_action:'cancel'});dirty=false;await loadState();open(next(id));status('Removed from your queue. The inventory product is preserved.');});
 $('confirm-available').onclick=()=>action(async()=>{if(!current||current.source_kind!=='imported')throw Error('Choose a stale imported item first.');const id=current.id;await rpc('studio_mercari_confirm_available',{p_kind:current.source_kind,p_id:current.source_id,p_reason:'Seller physically confirmed item is still in stock'});inventoryCache.clear();await loadState();await loadInventory();open(id);status('Availability confirmed for seven days. Complete any remaining listing details.');});
@@ -222,14 +232,14 @@ $('rebuild').onclick=()=>action(async()=>{
 });
 window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue='';}});
 auth.onAuthStateChange(event=>{if(event==='SIGNED_OUT'){sessionEpoch++;clearPhotos();queue=[];inventory=[];presets=[];selected.clear();current=null;dirty=false;$('workspace').hidden=true;$('login-note').hidden=false;for(const id of ['inventory','queue-list','photos','presets-list'])$(id).replaceChildren();status('Signed out. Sign in to use your private queue.');}});
-async function initialize(){await auth.initialize();const {data}=await auth.getSession();if(!data.session){$('login-note').hidden=false;status('Sign in with your existing Studio account.');return;}await loadState();await loadCatalog();$('catalog-view').value=catalog.enabled?'kept':'all';await loadCategories();await loadInventory();checkCompanion();$('login-note').hidden=true;$('workspace').hidden=false;const requested=new URLSearchParams(location.search).get('queue');
+async function initialize(){await auth.initialize();const {data}=await auth.getSession();if(!data.session){$('login-note').hidden=false;status('Sign in with your existing Studio account.');return;}await loadState();await loadCatalog();$('catalog-view').value=catalog.enabled?'kept':'all';await loadCategories();await loadInventory();$('login-note').hidden=true;$('workspace').hidden=false;const requested=new URLSearchParams(location.search).get('queue');
+ status('Choose products to prepare, or continue your saved Mercari queue.');
  if(requested&&queue.some(item=>item.id===requested)){view('queue');open(requested);}
- else{view('browse');status(requested?'This queue item is no longer available.':'Choose products to prepare, or continue your saved Mercari queue.');}
+ else{view('browse');if(requested)status('This queue item is no longer available.');}
 }
 $('retry-login').onclick=()=>action(initialize);
 shippingFields($('preset-shipping'),MercariCopy.shipping());action(initialize);
 
-function categoryMatch(value){return categoryPaths.find(path=>path.join(' › ').toLowerCase()===String(value).toLowerCase());}
 function suggestCategory(source){
  const f=source.fields||{},title=String(f.title||source.suggestions?.title||'').toLowerCase();
  const groups=[
@@ -261,44 +271,11 @@ function suggestCategory(source){
 function preparedDraft(source,shipping){const researched=catalog.research.find(j=>itemKey(j)===itemKey(source)&&j.state==='complete'&&j.source_digest===source.digest);const packed={...MercariCopy.shipping(),...(shipping||{})};for(const k of ['weight_oz','length_in','width_in','height_in'])if(!packed[k]&&researched?.result?.shipping?.[k])packed[k]=String(researched.result.shipping[k]);const d=MercariCopy.prepare(source,packed);d.category=$('batch-category').value.trim()||suggestCategory(source)||d.category;return d;}
 function setCategories(paths){categoryPaths=[...new Map([...(globalThis.MercariCategorySeed?.paths||[]),...paths].map(p=>[p.join(' › '),p])).values()];$('mercari-category-options').replaceChildren(...categoryPaths.map(p=>new Option(p.join(' › '),p.join(' › '))));$('category-count').textContent=categoryPaths.length+' category choices in '+new Set(categoryPaths.map(p=>p[0])).size+' departments · type to search';}
 async function loadCategories(){try{const result=await rpc('studio_mercari_categories');setCategories(result.paths);}catch{setCategories([]);}}
-async function checkCompanion(){try{const result=await MercariBridge.request('PING'),currentVersion=String(result.version),supported=companionCompatible(currentVersion)&&result.contract===POLICY_VERSION;$('extension-status').textContent='Mercari companion '+currentVersion+(supported?' connected':' — install the '+COMPANION_VERSION+' update');return supported;}catch(e){$('extension-status').textContent=e.message;return false;}}
-function bytesBase64(bytes){let value='';for(let i=0;i<bytes.length;i+=8192)value+=String.fromCharCode(...bytes.subarray(i,i+8192));return btoa(value);}
-async function autoFill(){
- if(!current)throw Error('Choose a queue item first.');
- const started=performance.now(),correlation_id=crypto.randomUUID();status('Connecting to the companion…');
- if(!await checkCompanion())throw Error('Reload Crazy Moe Mercari Companion '+COMPANION_VERSION+' in chrome://extensions, then refresh this page.');
- await save();const q=await rpc('studio_mercari_update',{p_id:current.id,p_revision:current.revision,p_action:'download'}),d=q.draft;
- const category_path=categoryMatch(d.category)||[];
- const files=[];let transferred=0;
- for(const [i,photo] of d.photos.entries()){
-  status('Preparing automatic photo transfer '+(i+1)+' of '+d.photos.length+'…');let bytes=await photoBytes(photo),ext=MercariCopy.format(photo,bytes),mime='image/'+ext.replace('jpg','jpeg');
-  if(typeof createImageBitmap==='function'&&bytes.length>1500000){const bitmap=await createImageBitmap(new Blob([bytes],{type:mime}));const ratio=Math.min(1,1600/Math.max(bitmap.width,bitmap.height)),canvas=document.createElement('canvas');canvas.width=Math.round(bitmap.width*ratio);canvas.height=Math.round(bitmap.height*ratio);canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close();const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',0.9));if(!blob)throw Error('Photo preparation failed');bytes=new Uint8Array(await blob.arrayBuffer());ext='jpg';mime='image/jpeg';}
-  transferred+=bytes.length;if(transferred>30*1024*1024)throw Error('Photo transfer exceeds 30 MB. Use fewer or smaller photos.');files.push({name:String(i+1).padStart(2,'0')+'.'+ext,mime,base64:bytesBase64(bytes)});
- }
- const requestId=crypto.randomUUID(),payload={requestId,queue_id:q.id,revision:q.revision,contract:POLICY_VERSION,server_ready:q.readiness?.ready===true,correlation_id,draft:{...d,category_path,files}};delete payload.draft.photos;
- pendingHandoff.set(requestId,{queue_id:q.id,revision:q.revision,correlation_id,started});try{const ack=await MercariBridge.request('FILL',payload,30000);if(!Number.isInteger(ack.tabId))throw Error('The companion did not confirm a Mercari tab. Reload the companion update.');await recordEvent('handoff_opened','OK',{correlation_id,queue_id:q.id,revision:q.revision,companion_version:COMPANION_VERSION,duration_ms:Math.round(performance.now()-started)});status('Mercari tab opened. Waiting for the form to confirm '+files.length+' photos and listing fields…');setTimeout(()=>{if(pendingHandoff.has(requestId)&&!pendingHandoff.get(requestId).responded)status('Mercari opened but has not confirmed filling. Check that tab for sign-in, an existing draft, or the companion status.');},45000);}catch(e){pendingHandoff.delete(requestId);recordEvent('handoff_opened','ERROR',{correlation_id,queue_id:q.id,revision:q.revision,companion_version:COMPANION_VERSION,duration_ms:Math.round(performance.now()-started)});throw e;}
-}
-$('auto-fill').onclick=()=>action(autoFill);$('check-extension').onclick=()=>action(()=>checkCompanion());
-$('import-categories').onclick=()=>action(async()=>{if(!await checkCompanion())throw Error('Reload the companion update first.');const requestId=crypto.randomUUID();pendingHandoff.set(requestId,{categories:true});await MercariBridge.request('CATEGORIES',{requestId,contract:POLICY_VERSION});status('A blank Mercari tab is importing its category tree. Keep it open until the import finishes.');});
-MercariBridge.onResult(async result=>{
- const active=pendingHandoff.get(result?.requestId);if(!active)return;active.responded=true;
- try{
-  if(result.state==='category_progress'){await rpc('studio_mercari_categories',{p_paths:result.paths});setCategories(result.paths);status('Category import: '+categoryPaths.length+' choices saved so far.');return;}
-  if(result.state==='categories'){await rpc('studio_mercari_categories',{p_paths:result.paths});setCategories(result.paths);pendingHandoff.delete(result.requestId);status('Imported '+result.paths.length+' Mercari category choices.');return;}
-  if(active.categories){status(result.error||'Category import needs attention.');return;}
-  const handoff=await rpc('studio_mercari_handoff',{p_id:active.queue_id,p_revision:active.revision,p_event:result.state,p_details:{url:result.url||null,done:result.done||[],warnings:result.warnings||[],error:result.error||null,requestId:result.requestId,contract:result.contract||null}});active.revision=handoff.revision;
-  await recordEvent('handoff_'+result.state,result.state==='error'?'ERROR':'OK',{correlation_id:active.correlation_id,queue_id:active.queue_id,revision:handoff.revision,companion_version:result.version||COMPANION_VERSION,duration_ms:active.started?Math.round(performance.now()-active.started):null,issue_codes:handoff.readiness?.issues?.map(i=>i.code)||[]});
-  const id=current?.id,hadUnsaved=dirty;await loadState();if(id&&!hadUnsaved)open(id);
-  if(result.state==='published'&&hadUnsaved){status('Mercari link recorded. Save your unsaved Studio edits before moving to another item.');return;}
-  if(result.state==='published'){pendingHandoff.delete(result.requestId);open(next(active.queue_id));status('Mercari listing link recorded automatically. Next product loaded.');if(current&&$('auto-next-fill').checked)await action(autoFill);}
-  else status(result.error||'Mercari loaded: '+(result.done||[]).join(', ')+'. '+(result.warnings||[]).join(' '));
- }catch(e){status(e.message);}
-});
 $('inventory-grid').onclick=()=>{inventoryLayout='grid';$('inventory-grid').setAttribute('aria-pressed','true');$('inventory-table-view').setAttribute('aria-pressed','false');renderInventory();};
 $('inventory-table-view').onclick=()=>{inventoryLayout='table';$('inventory-grid').setAttribute('aria-pressed','false');$('inventory-table-view').setAttribute('aria-pressed','true');renderInventory();};
 for(const id of ['inventory-sort','inventory-status','inventory-review'])$(id).onchange=()=>{page=0;renderInventory();};
 
-$('suggest-category').onclick=()=>{if(!current)return;const suggestion=suggestCategory({...current.source_snapshot,fields:{...current.source_snapshot.fields,title:form.elements.title.value}});if(!suggestion){status('No matching category is available in the saved catalog yet. Click Import / refresh Mercari categories to load the other departments.');return;}form.elements.category.value=suggestion;change();status('Suggested category: '+suggestion);};
+$('suggest-category').onclick=()=>{if(!current)return;const suggestion=suggestCategory({...current.source_snapshot,fields:{...current.source_snapshot.fields,title:form.elements.title.value}});if(!suggestion){status('No matching category was found. Choose the closest Mercari category for this item.');return;}form.elements.category.value=suggestion;change();status('Suggested category: '+suggestion);};
 
 $('save-recovery').onclick=()=>action(async()=>{
  if(!current||current.source_kind!=='imported')throw Error('Choose an imported queue item first.');

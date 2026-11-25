@@ -33,8 +33,10 @@ assert.match(worker,/CM_CONTRACT='mercari-2026-11-15\.1'/);
 assert.match(worker,/p\.server_ready!==true/);
 
 const studio=fs.readFileSync(path.join(root,'live-vercel/src/mercari.js'),'utf8');
-assert.match(studio,/COMPANION_VERSION='2\.4\.0'/);
-assert.doesNotMatch(studio,/parseFloat\(currentVersion\)/);
+const page=fs.readFileSync(path.join(root,'live-vercel/src/mercari.html'),'utf8');
+assert.match(page,/id="open-sell"[^>]*href="https:\/\/www\.mercari\.com\/sell\/"/);
+assert.doesNotMatch(page,/mercari-bridge\.js|id="auto-fill"/);
+assert.doesNotMatch(studio,/MercariBridge|studio_mercari_handoff/);
 assert.doesNotMatch(studio,/photos_confirmed:true/);
 
 console.log('Mercari contract tests passed');
