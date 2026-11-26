@@ -403,6 +403,8 @@ def burst_drafts(store, records, catalog, vision, single_item=False):
 
 
 def closeup_label(record, catalog):
+    if photo_identifiers([(record, "label")]):
+        return True
     lines = (record.get("text") or "").splitlines()
     words = " " + identifier_text(" ".join(lines)) + " "
     part_numbers = (alias for item in catalog.values() for alias in item.get("identifiers", [])
@@ -586,7 +588,11 @@ def checks(fields):
 
 
 def compile_draft(store, group, records, catalog, source, resolution=None):
-    rows = [(records[p["index"]], p["role"]) for p in group["photos"]]
+    rows = []
+    for entry in group["photos"]:
+        record = records[entry["index"]]
+        role = "label" if closeup_label(record, catalog) else entry["role"]
+        rows.append((record, role))
     item, evidence = resolution if resolution is not None else catalog_match(store, rows, catalog)
     model = item["model"] if item else ""
     product_type = re.sub(r"[^\w /&-]", "", group["type"], flags=re.ASCII).strip()[:70]

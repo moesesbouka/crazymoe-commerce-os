@@ -242,6 +242,18 @@ class StudioIntegrationTest(unittest.TestCase):
         self.assertEqual([], draft["gallery"])
         self.assertIsNone(draft["cover"])
 
+    def test_printed_model_on_its_own_line_stays_out_of_gallery(self):
+        record = {"id": "retail-model-label", "name": "lamp-box.jpg", "text": "FLOOR LAMP\nLF2000-SLV",
+                  "tokens": set(), "sensitive": False, "score": 90}
+        group = {"type": "Floor Lamp", "uncertain": False,
+                 "photos": [{"index": 0, "role": "product", "cover": True}]}
+        item = catalog_item(5)
+        draft = compile_draft(self.store, group, [record], {}, "local vision", (item, set()))
+        self.assertEqual(5500, draft["price_cents"])
+        self.assertFalse(draft["gallery"])
+        self.assertIsNone(draft["cover"])
+        self.assertTrue(draft["photos"][0]["blocked"])
+
     def test_model_cannot_choose_a_private_or_duplicate_frame(self):
         answer = {"private": [2], "detail": [], "groups": [
             {"type": "scale", "description": "Black glass scale.", "photos": [1, 2], "cover": 2}
