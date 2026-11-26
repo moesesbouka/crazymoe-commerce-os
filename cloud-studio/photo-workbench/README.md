@@ -21,8 +21,14 @@ python -m studio.server --data ./data --catalog catalog/warehouse-reviewed.json
 ```
 
 Install Tesseract and the DejaVu Sans Bold font. Set `MOE_LOCAL_VISION_MODEL` to a
-local vision model to enable visual grouping. The catalog contains dated evidence.
-Items without enough evidence still require seller review.
+local vision model to enable visual grouping. Completed uploads run OCR, visual
+grouping, product research, draft copy, and cover rendering automatically.
+When the catalog lacks an exact model or a current offer, the worker searches
+for printed model identifiers and retail barcodes and checks structured product
+data from supported retailers. Photos and raw OCR stay on the AI desktop.
+Verified new retail offers suggest an asking price at half their mean.
+Drafts with insufficient evidence display the available fields and their review
+checks. Preparing a draft does not approve or publish it.
 
 To enable portal access on the existing private Windows pilot, set
 `MOE_STUDIO_PORTAL_ORIGIN=https://studio.crazymoe.com` alongside the configured

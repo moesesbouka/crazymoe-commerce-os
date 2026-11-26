@@ -19,6 +19,7 @@ from pathlib import Path
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps, ImageStat
 
 from .local_vision import BURST_GAP_SECONDS, LocalVision, capture_runs, capture_time, fallback_groups
+from .research import lookup_product, photo_identifiers
 from .store import RequestError
 
 
@@ -79,11 +80,14 @@ def review_photo(store, row):
     path = store.root / "uploads" / row["id"]
     img = photo(path)
     text = ocr(img)
-    codes = set()
+    codes, gtins = set(), set()
     if zxingcpp is not None:
         scan = img.copy()
         scan.thumbnail((2400, 2400))
-        codes = {entry.text for entry in zxingcpp.read_barcodes(scan)}
+        barcodes = zxingcpp.read_barcodes(scan)
+        codes = {entry.text for entry in barcodes}
+        gtins = {entry.text for entry in barcodes if getattr(entry.format, "name", "") in
+                 {"EAN8", "EAN13", "UPCA"}}
     if text and (codes or SENSITIVE.search(text)) and not model_tokens(text):
         alternate = ocr(img.rotate(180))
         if alternate:
@@ -96,7 +100,7 @@ def review_photo(store, row):
     exposure = ImageStat.Stat(gray).mean[0]
     score = sharpness + contrast / 5 - abs(145 - exposure) / 12
     return {"id": row["id"], "name": row["name"], "text": text, "tokens": model_tokens(text),
-            "codes": codes, "taken": capture_time(path),
+            "codes": codes, "gtins": gtins, "taken": capture_time(path),
             "sensitive": text is None or bool(codes) or bool(SENSITIVE.search(text)), "score": round(score, 2)}
 
 
@@ -369,17 +373,20 @@ def suggest_price(item, condition):
         except (TypeError, ValueError, KeyError, AttributeError):
             continue
     values = list(evidence.values())
-    if len(values) < 2:
+    required = 1 if desired == "retail" and item.get("single_source_price") else 2
+    if len(values) < required:
         return {"basis": "Insufficient same-model price evidence", "sources": values, "cents": None}
     prices = [row["cents"] for row in values]
     median = statistics.median(prices)
     values = [row for row in values if median * .65 <= row["cents"] <= median * 1.45]
-    if len(values) < 2:
+    if len(values) < required:
         return {"basis": "Price sources disagree", "sources": values, "cents": None}
     anchor = Decimal(sum(x["cents"] for x in values)) / len(values)
     factor = Decimal(".50") if desired == "retail" else Decimal(".85")
     cents = int((anchor * factor / 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP)) * 100
-    return {"basis": "50% of matched retail mean" if desired == "retail" else "85% of matched sold mean",
+    basis = ("85% of matched sold mean" if desired == "sold" else
+             "50% of one verified retail offer" if len(values) == 1 else "50% of matched retail mean")
+    return {"basis": basis,
             "sources": values, "anchor": int(round(anchor)), "cents": cents if cents > 0 else None}
 
 
@@ -458,14 +465,14 @@ def checks(fields):
     return issues
 
 
-def compile_draft(store, group, records, catalog, source):
+def compile_draft(store, group, records, catalog, source, resolution=None):
     rows = [(records[p["index"]], p["role"]) for p in group["photos"]]
-    item, evidence = catalog_match(store, rows, catalog)
+    item, evidence = resolution if resolution is not None else catalog_match(store, rows, catalog)
     model = item["model"] if item else ""
     product_type = re.sub(r"[^\w /&-]", "", group["type"], flags=re.ASCII).strip()[:70]
     if SENSITIVE.search(product_type):
         product_type = ""
-    title = item["title"] if model else (product_type.title() or "Untitled item")
+    title = item["title"] if model else (product_type.title() or "Product needs identification")
     specs = item.get("specs", {}) if model else {}
     description = (item.get("description", "") if model else "") or group.get("description", "")
     if not isinstance(description, str) or AUDIT.search(description) or SENSITIVE.search(description):
@@ -494,16 +501,63 @@ def compile_draft(store, group, records, catalog, source):
               "identity": model or "Variant unconfirmed", "specs": specs, "price_cents": price["cents"],
               "price": price, "price_override": False, "uncertain": group["uncertain"], "gallery": photo_ids,
               "cover": photo_ids[0] if photo_ids else None, "photo_reviewed": False,
-              "source": source, "photos": [{"id": r["id"], "name": r["name"], "role": role,
+              "source": source, "identity_sources": item.get("identity_sources", []) if item else [],
+              "photos": [{"id": r["id"], "name": r["name"], "role": role,
                                              "blocked": r["sensitive"] or bool(r["tokens"]) or role == "label",
                                              "excluded": r["id"] not in photo_ids} for r, role in rows]}
     fields["issues"] = checks(fields)
     return fields
 
 
-def process(store, batch, lease, files, catalog, grouping=gemini_groups):
+def resolve_products(store, groups, records, catalog, research):
+    resolutions, lookups = [], {}
+    for group in groups:
+        rows = [(records[p["index"]], p["role"]) for p in group["photos"]]
+        item, evidence = catalog_match(store, rows, catalog)
+        terms = photo_identifiers(rows, item)
+        if (research and terms and not (item and item.get("price_identifiers"))
+                and (not item or suggest_price(item, "New")["cents"] is None)):
+            key = terms, item["model"] if item else None
+            lookups.setdefault(key, item)
+        else:
+            key = None
+        resolutions.append((item, evidence, key))
+    if not lookups:
+        return [(item, evidence) for item, evidence, _ in resolutions]
+
+    deadline = time.monotonic() + 110
+
+    def find(key):
+        if time.monotonic() >= deadline:
+            return None
+        try:
+            return research(key[0], lookups[key], deadline)
+        except (TypeError, ValueError, OSError):
+            logging.warning("Product pages did not return usable evidence for an item.")
+            return None
+
+    with ThreadPoolExecutor(max_workers=5) as worker:
+        found = dict(zip(lookups, worker.map(find, lookups), strict=True))
+    enriched = []
+    for item, evidence, key in resolutions:
+        match = found.get(key)
+        if match:
+            if item:
+                match = {**match, **item, "identity_sources": match["identity_sources"],
+                         "single_source_price": True,
+                         "observations": [*match["observations"], *item.get("observations", [])]}
+            item = match
+        enriched.append((item, evidence))
+    return enriched
+
+
+def process(store, batch, lease, files, catalog, grouping=gemini_groups, research=None):
+    if research is None and grouping is gemini_groups:
+        research = lookup_product
+    store.progress(batch, lease, "Reading model labels and barcodes…")
     with ThreadPoolExecutor(max_workers=4) as pool:
         records = list(pool.map(lambda row: review_photo(store, row), files))
+    store.progress(batch, lease, "Grouping products and selecting covers…")
     groups, source = None, "capture-time suggestions"
     try:
         local = LocalVision.from_environment() if grouping is gemini_groups else None
@@ -519,7 +573,11 @@ def process(store, batch, lease, files, catalog, grouping=gemini_groups):
         logging.warning("Vision grouping unavailable, using tentative capture-time suggestions.")
     if not groups:
         groups = burst_drafts(store, records, catalog, None)
-    drafts = [compile_draft(store, g, records, catalog, g.get("source", source)) for g in groups]
+    store.progress(batch, lease, "Checking product details and current retail offers…")
+    resolutions = resolve_products(store, groups, records, catalog, research)
+    store.progress(batch, lease, "Writing drafts and preparing listing photos…")
+    drafts = [compile_draft(store, g, records, catalog, g.get("source", source), resolution)
+              for g, resolution in zip(groups, resolutions, strict=True)]
     modes = {d["source"] for d in drafts}
     evaluation = next(iter(modes)) if len(modes) == 1 else "in-house review with capture-time suggestions"
     store.finish(batch, lease, drafts, evaluation)

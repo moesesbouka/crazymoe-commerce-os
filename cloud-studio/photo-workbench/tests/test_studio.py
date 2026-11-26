@@ -221,6 +221,35 @@ class StudioIntegrationTest(unittest.TestCase):
         record["text"] = "XGIMI Halo+"
         self.assertEqual(item, catalog_match(self.store, [(record, "product")], {item["model"]: item})[0])
 
+    def test_new_upload_researches_an_uncatalogued_model(self):
+        images = [fixture(23), fixture(23, label=True)]
+        batch = self.create([(f"model-photo-{i}.jpg", data) for i, data in enumerate(images)])
+        for file, data in zip(batch["files"], images, strict=True):
+            self.upload(batch["id"], file, data)
+        group = {"type": "Lamp", "uncertain": True, "photos": [
+            {"index": 0, "role": "product", "cover": True}, {"index": 1, "role": "label"},
+        ]}
+        def lookup(identifiers, known, deadline):
+            self.assertIsNone(known)
+            self.assertIn("CM-023", identifiers)
+            self.assertEqual("Checking product details and current retail offers…", self.store.batch(batch["id"])["issue"])
+            item = catalog_item(23)
+            item["observations"] = item["observations"][:1]
+            item["identity_sources"] = [item["observations"][0]["url"]]
+            item["single_source_price"] = True
+            return item
+        process(self.store, *self.store.claim(), {}, grouping=lambda *_: [group], research=lookup)
+        completed = self.store.batch(batch["id"])
+        self.assertEqual("review", completed["state"])
+        self.assertIsNone(completed["issue"])
+        self.assertEqual(1, len(completed["drafts"]))
+        draft = completed["drafts"][0]
+        self.assertEqual("CM-023", draft["identity"])
+        self.assertEqual(5000, draft["price_cents"])
+        self.assertEqual("50% of one verified retail offer", draft["price"]["basis"])
+        self.assertEqual([batch["files"][0]["id"]], draft["gallery"])
+        self.assertFalse(draft["approval"])
+
     def test_gallery_revision_renders_added_photo_and_rejects_label(self):
         images = [fixture(0), fixture(1), fixture(0, label=True)]
         batch = self.create([(f"photo-{i}.jpg", data) for i, data in enumerate(images)])

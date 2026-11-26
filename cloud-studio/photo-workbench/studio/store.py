@@ -204,7 +204,14 @@ class Store:
                 db.execute("INSERT INTO drafts(id,batch_id,fields) VALUES(?,?,?)", (ident, batch, snapshot))
                 db.execute("INSERT INTO revisions VALUES(?,?,?,?)", (ident, 1, snapshot, time.time()))
             db.execute("UPDATE jobs SET state='done' WHERE batch_id=?", (batch,))
-            db.execute("UPDATE batches SET state='review',evaluation=? WHERE id=?", (evaluation, batch))
+            db.execute("UPDATE batches SET state='review',evaluation=?,issue=NULL WHERE id=?", (evaluation, batch))
+
+    def progress(self, batch, lease, message):
+        with self.connection(write=True) as db:
+            renewed = db.execute("UPDATE jobs SET expires=? WHERE batch_id=? AND state='running' AND lease=?",
+                                 (time.time() + 900, batch, lease))
+            if renewed.rowcount:
+                db.execute("UPDATE batches SET issue=? WHERE id=? AND state='processing'", (message, batch))
 
     def retry(self, batch):
         with self.connection(write=True) as db:
