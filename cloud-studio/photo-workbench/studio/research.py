@@ -447,3 +447,43 @@ def lookup_product(identifiers, known=None, deadline=None, read=fetch):
                 "description": lead["title"] + ".", "identity_sources": [row["url"] for row in results],
                 "observations": offers, "single_source_price": True}
     return None
+
+
+def appearance_candidates(query, deadline, read=fetch):
+    """Gather model leads. A query from appearance never verifies identity or price."""
+    term = urllib.parse.quote_plus(query)
+    models = {}
+    visited = set()
+    keywords = [word for word in query.lower().split() if word not in {"countertop", "portable"}][:2]
+    for search in (f"https://search.yahoo.com/search?p={term}",
+                   f"https://www.bing.com/search?q={term}",
+                   f"https://html.duckduckgo.com/html/?q={term}"):
+        if time.monotonic() >= deadline:
+            break
+        result = read(search, deadline)
+        if not result:
+            continue
+        links = [url for url in dict.fromkeys(product_links(result[1])) if url not in visited][:4]
+        for url in links:
+            page = read(url, deadline)
+            visited.add(url)
+            if not page:
+                continue
+            parser = PageEvidence()
+            parser.feed(page[1])
+            for block in parser.blocks:
+                for node in products(block):
+                    name = text_value(node.get("name"), 150)
+                    code = model_term(text_value(node.get("mpn") or node.get("model")))
+                    if not code or not name or BUNDLE.search(name):
+                        continue
+                    words = set(re.findall(r"[a-z]+", name.lower()))
+                    if not set(keywords) <= words:
+                        continue
+                    source = urllib.parse.urlsplit(page[0])
+                    href = urllib.parse.urlunsplit((source.scheme, source.netloc, source.path, "", ""))
+                    if store_host(href):
+                        models.setdefault(normalized_id(code), {"model": code, "title": name, "url": href})
+        if models:
+            break
+    return list(models.values())[:5]

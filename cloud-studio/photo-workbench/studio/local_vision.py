@@ -61,6 +61,13 @@ BURST_PROMPT = (
     "transcribe a brand/model only when readable. JSON fields kind, cover, angles, words. "
     "No condition or pricing claims."
 )
+CLUE_SCHEMA = {
+    "type": "object", "required": ["brand", "features"],
+    "properties": {
+        "brand": {"type": "string", "maxLength": 32},
+        "features": {"type": "array", "maxItems": 4, "items": {"type": "string", "maxLength": 40}},
+    },
+}
 
 
 def capture_time(path):
@@ -87,10 +94,10 @@ def capture_runs(records, gap_seconds):
     return runs
 
 
-def fallback_groups(records):
+def fallback_groups(records, runs=None):
     return [{"type": "", "uncertain": True, "photos": [
         {"index": i, "role": "label" if records[i]["sensitive"] or records[i]["tokens"] else "product"}
-        for i in run]} for run in capture_runs(records, BURST_GAP_SECONDS)]
+        for i in run]} for run in (capture_runs(records, BURST_GAP_SECONDS) if runs is None else runs)]
 
 
 def boards(records):
@@ -222,7 +229,8 @@ class LocalVision:
         return json.loads(content)
 
     def review_burst(self, store, records, indices, timeout=25):
-        picture = board_image(Path(store.root) / "uploads", records, indices, cell=190, columns=3, quality=65)
+        cell = 650 if len(indices) == 1 else 320 if len(indices) <= 4 else 208
+        picture = board_image(Path(store.root) / "uploads", records, indices, cell=cell, columns=3, quality=78)
         answer = self.classify(picture, BURST_PROMPT, BURST_SCHEMA, max_tokens=250, timeout=timeout)
         cover = answer["cover"]
         if type(cover) is not int or not 0 <= cover <= len(indices):
@@ -234,6 +242,18 @@ class LocalVision:
             raise ValueError("The agent returned invalid photo evidence.")
         return {**answer, "cover": indices[cover - 1] if cover else None,
                 "angles": [indices[i - 1] for i in angles]}
+
+    def product_clues(self, image, timeout):
+        blob = io.BytesIO()
+        ImageOps.contain(image, (768, 768)).save(blob, "JPEG", quality=84)
+        return self.classify(
+            base64.b64encode(blob.getvalue()).decode("ascii"),
+            "Look only at the main physical product. Read the visible manufacturer brand if legible, "
+            "otherwise use an empty string. List up to four short visible design attributes that distinguish "
+            "this product from similar models, such as glass carafe or top rotary dial. Exclude model guesses, "
+            "serial numbers, label contents, background details, people, condition and internal specifications.",
+            CLUE_SCHEMA, max_tokens=160, timeout=timeout,
+        )
 
     def group(self, store, records, validate):
         result = []

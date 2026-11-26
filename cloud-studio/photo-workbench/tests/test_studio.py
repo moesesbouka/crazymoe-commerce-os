@@ -82,13 +82,68 @@ class StudioIntegrationTest(unittest.TestCase):
         except urllib.error.HTTPError as failed:
             self.assertEqual(error, failed.code, failed.read())
 
-    def create(self, manifest, key=None):
+    def create(self, manifest, key=None, single_item=False):
         return self.api("/api/batches", "POST", {"key": key or uuid.uuid4().hex,
+                        "single_item": single_item,
                         "files": [{"name": name, "size": len(data), "sha": hashlib.sha256(data).hexdigest()}
                                   for name, data in manifest]})
 
     def upload(self, batch, f, data, offset=0, error=None):
         return self.api(f"/api/batches/{batch}/files/{f['id']}", "PUT", data, {"Upload-Offset": str(offset)}, error)
+
+    def test_one_product_across_capture_gaps_resumes_and_fills_verified_price(self):
+        def taken(jpeg, timestamp):
+            with Image.open(io.BytesIO(jpeg)) as image, io.BytesIO() as output:
+                exif = Image.Exif()
+                exif[36867] = timestamp
+                image.save(output, "JPEG", exif=exif)
+                return output.getvalue()
+
+        images = [taken(fixture(23), "2025:12:25 16:03:42"),
+                  taken(fixture(24), "2025:12:25 18:43:36"), fixture(23, label=True)]
+        manifest = [(f"coffee-{i}.jpg", image) for i, image in enumerate(images)]
+        key = uuid.uuid4().hex
+        batch = self.create(manifest, key, single_item=True)
+        bid = batch["id"]
+        self.upload(bid, batch["files"][0], images[0])
+        self.api(f"/api/batches/{bid}/commit", "POST", {"allow_incomplete": True}, error=409)
+        self.assertIsNone(self.store.claim())
+        resumed = self.create(manifest, key, single_item=True)
+        self.assertEqual(bid, resumed["id"])
+        self.assertEqual(["accepted", "pending", "pending"], [f["state"] for f in resumed["files"]])
+        for file, image in zip(resumed["files"][1:], images[1:], strict=True):
+            self.upload(bid, file, image)
+        process(self.store, *self.store.claim(), {"CM-023": catalog_item(23)}, grouping=synthetic_grouper)
+        draft, = self.store.batch(bid)["drafts"]
+        self.assertFalse(draft["uncertain"])
+        self.assertEqual("One product at intake", draft["grouping_basis"])
+        self.assertEqual("CM-023", draft["identity"])
+        self.assertEqual(5500, draft["price_cents"])
+        self.assertEqual(3, len(draft["photos"]))
+        self.assertNotIn(batch["files"][2]["id"], draft["gallery"])
+
+        self.api(f"/api/drafts/{draft['id']}", "PATCH", {"revision": 1, "title": "Seller title", "price_cents": 4900})
+        self.api(f"/api/batches/{bid}/refresh", "POST", {})
+        self.api(f"/api/batches/{bid}/refresh", "POST", {})
+        process(self.store, *self.store.claim(), {"CM-023": catalog_item(23)}, grouping=synthetic_grouper)
+        checked, = self.store.batch(bid)["drafts"]
+        self.assertEqual(draft["id"], checked["id"])
+        self.assertEqual(draft["photos"], checked["photos"])
+        self.assertEqual("Seller title", checked["title"])
+        self.assertEqual(4900, checked["price_cents"])
+        self.assertEqual(3, checked["revision"])
+        self.assertIsNone(self.store.claim())
+
+    def test_shared_model_does_not_join_separate_units(self):
+        def records(serials):
+            return [{"id": str(i), "taken": datetime(2026, 11, 26, 12 + i), "sensitive": True,
+                     "tokens": {"CM401"}, "text": f"MODEL CM401\nSERIAL: {serial}"}
+                    for i, serial in enumerate(serials)]
+
+        self.assertEqual(2, len(burst_drafts(self.store, records(["AB902337", "AB902338"]), {}, None)))
+        group, = burst_drafts(self.store, records(["AB902337", "AB902337"]), {}, None)
+        self.assertEqual("Matching unit serial", group["grouping_basis"])
+        self.assertEqual([0, 1], [p["index"] for p in group["photos"]])
 
     def test_64_photo_intake_to_approved_package(self):
         manifest = [(f"{i}-label-image.jpg", fixture(i, label=True)) for i in range(7)]

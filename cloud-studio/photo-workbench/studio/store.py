@@ -29,9 +29,15 @@ CREATE TABLE IF NOT EXISTS files (
   size INTEGER NOT NULL, offset INTEGER NOT NULL DEFAULT 0, ordinal INTEGER NOT NULL,
   state TEXT NOT NULL DEFAULT 'pending', expected_sha TEXT NOT NULL, sha TEXT, issue TEXT, UNIQUE(batch_id, ordinal)
 );
+CREATE TABLE IF NOT EXISTS single_item_batches (
+  batch_id TEXT PRIMARY KEY REFERENCES batches(id)
+);
 CREATE TABLE IF NOT EXISTS jobs (
   batch_id TEXT PRIMARY KEY REFERENCES batches(id), state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
   next_at REAL NOT NULL DEFAULT 0, lease TEXT, expires REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS refresh_plans (
+  batch_id TEXT PRIMARY KEY REFERENCES batches(id), drafts TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS drafts (
   id TEXT PRIMARY KEY, batch_id TEXT NOT NULL REFERENCES batches(id), revision INTEGER NOT NULL DEFAULT 1,
@@ -74,7 +80,9 @@ class Store:
         finally:
             db.close()
 
-    def create(self, key, manifest):
+    def create(self, key, manifest, single_item=False):
+        if type(single_item) is not bool:
+            raise RequestError("Choose one product or a mixed batch.")
         if not isinstance(key, str) or not 16 <= len(key) <= 100:
             raise RequestError("Invalid upload key.")
         if not isinstance(manifest, list) or not 1 <= len(manifest) <= 100:
@@ -89,14 +97,25 @@ class Store:
             if previous:
                 batch = previous["id"]
                 old = db.execute("SELECT name,size,expected_sha FROM files WHERE batch_id=? ORDER BY ordinal", (batch,))
-                if [tuple(x) for x in old] != [(f["name"], f["size"], f["sha"]) for f in manifest]:
+                if ([tuple(x) for x in old] != [(f["name"], f["size"], f["sha"]) for f in manifest]
+                        or self._single_item(db, batch) != single_item):
                     raise RequestError("This upload key already belongs to a different set of photos.", 409)
                 return batch
             batch = new_id()
             db.execute("INSERT INTO batches(id,request_key,created) VALUES(?,?,?)", (batch, key, time.time()))
+            if single_item:
+                db.execute("INSERT INTO single_item_batches VALUES(?)", (batch,))
             db.executemany("INSERT INTO files(id,batch_id,name,size,ordinal,expected_sha) VALUES(?,?,?,?,?,?)",
                            [(new_id(), batch, f["name"], f["size"], i, f["sha"]) for i, f in enumerate(manifest)])
         return batch
+
+    @staticmethod
+    def _single_item(db, batch):
+        return db.execute("SELECT 1 FROM single_item_batches WHERE batch_id=?", (batch,)).fetchone() is not None
+
+    def single_item(self, batch):
+        with self.connection() as db:
+            return self._single_item(db, batch)
 
     def put(self, batch, file_id, offset, content, inspect):
         with self.connection(write=True) as db:
@@ -152,7 +171,7 @@ class Store:
         db.execute("UPDATE batches SET state='queued' WHERE id=?", (batch,))
         db.execute("INSERT OR IGNORE INTO jobs(batch_id,state) VALUES(?,'queued')", (batch,))
 
-    def commit_batch(self, batch, allow_incomplete=False):
+    def commit_batch(self, batch):
         with self.connection(write=True) as db:
             current = db.execute("SELECT state FROM batches WHERE id=?", (batch,)).fetchone()
             if not current:
@@ -160,10 +179,7 @@ class Store:
             if current["state"] != "receiving":
                 return
             if db.execute("SELECT 1 FROM files WHERE batch_id=? AND state='pending'", (batch,)).fetchone():
-                if not allow_incomplete:
-                    raise RequestError("Finish sending your photos or process the received files only.", 409)
-                db.execute("UPDATE files SET state='skipped',issue='Upload ended before completion' "
-                           "WHERE batch_id=? AND state='pending'", (batch,))
+                raise RequestError("Finish uploading the remaining photos. The received files are saved.", 409)
             if not db.execute("SELECT 1 FROM files WHERE batch_id=? AND state='accepted'", (batch,)).fetchone():
                 raise RequestError("This batch has no valid photos to process.", 422)
             self.enqueue(db, batch)
@@ -198,11 +214,24 @@ class Store:
                            ("queued" if retry else "failed", time.time() + 2 ** job["attempts"], batch))
                 db.execute("UPDATE batches SET state=?,issue=? WHERE id=?", ("queued" if retry else "failed", error, batch))
                 return
-            for draft in drafts:
-                ident = new_id()
-                snapshot = json.dumps(draft)
-                db.execute("INSERT INTO drafts(id,batch_id,fields) VALUES(?,?,?)", (ident, batch, snapshot))
-                db.execute("INSERT INTO revisions VALUES(?,?,?,?)", (ident, 1, snapshot, time.time()))
+            if plan := db.execute("SELECT drafts FROM refresh_plans WHERE batch_id=?", (batch,)).fetchone():
+                versions = json.loads(plan["drafts"])
+                for draft in drafts:
+                    ident = draft.pop("refresh_id")
+                    version = versions[ident] + 1
+                    snapshot = json.dumps(draft)
+                    changed = db.execute(
+                        "UPDATE drafts SET fields=?,revision=? WHERE id=? AND revision=? AND approval IS NULL",
+                        (snapshot, version, ident, version - 1))
+                    if changed.rowcount:
+                        db.execute("INSERT INTO revisions VALUES(?,?,?,?)", (ident, version, snapshot, time.time()))
+                db.execute("DELETE FROM refresh_plans WHERE batch_id=?", (batch,))
+            else:
+                for draft in drafts:
+                    ident = new_id()
+                    snapshot = json.dumps(draft)
+                    db.execute("INSERT INTO drafts(id,batch_id,fields) VALUES(?,?,?)", (ident, batch, snapshot))
+                    db.execute("INSERT INTO revisions VALUES(?,?,?,?)", (ident, 1, snapshot, time.time()))
             db.execute("UPDATE jobs SET state='done' WHERE batch_id=?", (batch,))
             db.execute("UPDATE batches SET state='review',evaluation=?,issue=NULL WHERE id=?", (evaluation, batch))
 
@@ -220,6 +249,49 @@ class Store:
                 raise RequestError("Only a failed batch can be retried.", 409)
             db.execute("UPDATE batches SET state='queued',issue=NULL WHERE id=?", (batch,))
 
+    def refresh(self, batch):
+        with self.connection(write=True) as db:
+            row = db.execute("SELECT state FROM batches WHERE id=?", (batch,)).fetchone()
+            if not row:
+                raise RequestError("Batch not found.", 404)
+            if db.execute("SELECT 1 FROM refresh_plans WHERE batch_id=?", (batch,)).fetchone():
+                if row["state"] in ("queued", "processing"):
+                    return
+                raise RequestError("Retry the existing identifier job first.", 409)
+            if row["state"] != "review":
+                raise RequestError("Wait for the current upload or processing to finish.", 409)
+            versions = {draft["id"]: draft["revision"] for draft in db.execute("""
+                SELECT id,revision FROM drafts d WHERE batch_id=? AND approval IS NULL
+                AND COALESCE(json_extract(fields,'$.merged'),0)=0
+                AND NOT EXISTS (SELECT 1 FROM handoffs WHERE draft_id=d.id)
+                """, (batch,))}
+            if not versions:
+                raise RequestError("There are no eligible unapproved drafts in this batch.", 409)
+            db.execute("INSERT INTO refresh_plans VALUES(?,?)", (batch, json.dumps(versions)))
+            db.execute("UPDATE jobs SET state='queued',attempts=0,next_at=0,lease=NULL WHERE batch_id=?", (batch,))
+            db.execute("UPDATE batches SET state='queued',issue=NULL WHERE id=?", (batch,))
+
+    def refresh_inputs(self, batch):
+        with self.connection() as db:
+            plan = db.execute("SELECT drafts FROM refresh_plans WHERE batch_id=?", (batch,)).fetchone()
+            if plan is None:
+                return None
+            inputs = []
+            for ident, revision in json.loads(plan["drafts"]).items():
+                row = db.execute("""SELECT d.fields,r.snapshot FROM drafts d
+                    JOIN revisions r ON r.draft_id=d.id AND r.revision=1
+                    WHERE d.id=? AND d.revision=? AND d.approval IS NULL""", (ident, revision)).fetchone()
+                if row:
+                    inputs.append((ident, json.loads(row["fields"]), json.loads(row["snapshot"])))
+            return inputs
+
+    def reference_drafts(self):
+        with self.connection() as db:
+            return [json.loads(row["fields"]) for row in db.execute("""SELECT fields FROM drafts
+                WHERE approval=revision AND json_extract(fields,'$.cover') IS NOT NULL
+                AND json_array_length(json_extract(fields,'$.identity_sources'))>0
+                ORDER BY rowid DESC LIMIT 24""")]
+
     @staticmethod
     def draft_row(row):
         return {"id": row["id"], "batch": row["batch_id"], "revision": row["revision"],
@@ -232,7 +304,8 @@ class Store:
                 raise RequestError("Batch not found.", 404)
             files = db.execute("SELECT id,name,size,offset,state,issue,expected_sha sha FROM files WHERE batch_id=? ORDER BY ordinal", (batch,))
             drafts = db.execute("SELECT * FROM drafts WHERE batch_id=? ORDER BY rowid", (batch,))
-            return {**dict(row), "files": [dict(f) for f in files], "drafts": [self.draft_row(f) for f in drafts]}
+            return {**dict(row), "single_item": self._single_item(db, batch),
+                    "files": [dict(f) for f in files], "drafts": [self.draft_row(f) for f in drafts]}
 
     def batches(self):
         with self.connection() as db:

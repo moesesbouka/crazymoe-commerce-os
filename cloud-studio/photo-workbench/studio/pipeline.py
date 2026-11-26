@@ -19,7 +19,7 @@ from pathlib import Path
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps, ImageStat
 
 from .local_vision import BURST_GAP_SECONDS, LocalVision, capture_runs, capture_time, fallback_groups
-from .research import lookup_product, photo_identifiers
+from .research import appearance_candidates, lookup_product, model_term, photo_identifiers, store_host
 from .store import RequestError
 
 
@@ -30,6 +30,19 @@ SENSITIVE = re.compile(r"\b(serial|barcode|imei|tracking|s/n|ship to|packing sli
                        r"scan (?:the |this )?qr|activate (?:your |the )?scooter)\b|@|\b\d{9,}\b", re.I)
 AUDIT = re.compile(r"\b(unverified|confidence score|warehouse photos?|cannot confirm|intentionally unbranded|verified by)\b", re.I)
 MODEL = re.compile(r"\b(?:model|mpn)\s*(?:no\.?\s*)?[:#]?\s*([A-Z0-9](?:[A-Z0-9/-]{1,31}))\b", re.I)
+SERIAL = re.compile(r"\b(?:serial(?:\s+(?:no\.?|number))?|s/n)\s*[:#-]?\s*([A-Z0-9-]{8,28})\b", re.I)
+PUBLIC_BRANDS = {
+    "acer", "asus", "bissell", "black decker", "bosch", "bose", "breville", "canon",
+    "cuisinart", "dell", "dewalt", "dyson", "epson", "frigidaire", "ge", "hamilton beach",
+    "hisense", "instant", "jbl", "kenwood", "keurig", "kitchenaid", "kodak", "lg", "makita",
+    "milwaukee", "ninja", "pioneer", "ryobi", "samsung", "shark", "sony", "tcl",
+    "vankyo", "vizio", "whirlpool", "xgimi", "yamaha",
+}
+PUBLIC_FEATURES = {
+    "black", "white", "silver", "stainless steel", "glass carafe", "thermal carafe",
+    "fold away frother", "side reservoir", "rotary dial", "top controls", "front controls",
+    "clear lid", "touch controls", "glass top", "side vents", "countertop", "portable",
+}
 
 try:
     from pillow_heif import register_heif_opener
@@ -288,9 +301,60 @@ VISUAL_COPY = (
 )
 
 
-def burst_drafts(store, records, catalog, vision):
-    runs = capture_runs(records, BURST_GAP_SECONDS)
-    groups = fallback_groups(records)
+def physical_serials(record):
+    return {code for code in SERIAL.findall((record["text"] or "").upper()) if any(c.isdigit() for c in code)}
+
+
+def unit_runs(records):
+    for run in capture_runs(records, BURST_GAP_SECONDS):
+        segment = []
+        seen = set()
+        for index in run:
+            serials = physical_serials(records[index])
+            if segment and serials and seen and serials.isdisjoint(seen):
+                yield segment
+                segment = []
+                seen.clear()
+            segment.append(index)
+            seen.update(serials)
+        if segment:
+            yield segment
+
+
+def reconcile_serials(groups, records):
+    """Attach across capture gaps only on matching unit-specific evidence."""
+    for group in groups:
+        group["serials"] = set().union(*(physical_serials(records[p["index"]]) for p in group["photos"]))
+        group["unit_models"] = set().union(*(records[p["index"]]["tokens"] for p in group["photos"]))
+    combined = []
+    for group in groups:
+        serial = group["serials"]
+        prior = next((old for old in combined if len(serial) == 1 and old["serials"] == serial
+                      and len(group["unit_models"]) == 1 and old["unit_models"] == group["unit_models"]), None)
+        if prior is None:
+            combined.append(group)
+        else:
+            prior["photos"].extend(group["photos"])
+            if not prior["type"]:
+                prior["type"] = group["type"]
+                prior["description"] = group.get("description", "")
+            prior["grouping_basis"] = "Matching unit serial"
+    for group in combined:
+        del group["serials"]
+        del group["unit_models"]
+    return combined
+
+
+def burst_drafts(store, records, catalog, vision, single_item=False):
+    runs = list(unit_runs(records))
+    groups = fallback_groups(records, runs)
+    if single_item and groups:
+        groups = [{"type": "", "uncertain": False, "grouping_basis": "One product at intake",
+                   "photos": [entry for group in groups for entry in group["photos"]]}]
+        runs = [[entry["index"] for entry in groups[0]["photos"]]]
+        if len(set().union(*(physical_serials(record) for record in records))) > 1:
+            groups[0]["uncertain"] = True
+            groups[0]["grouping_basis"] = "Multiple serial numbers detected"
     if vision:
         deadline = time.monotonic() + 420
         for indices, group in zip(runs, groups, strict=True):
@@ -298,7 +362,8 @@ def burst_drafts(store, records, catalog, vision):
             if remaining < 2:
                 break
             if len(indices) > 10:
-                continue
+                indices = sorted(indices, key=lambda i: (closeup_label(records[i], catalog),
+                                                         -records[i]["score"]))[:8]
             try:
                 answer = vision.review_burst(store, records, indices, timeout=min(25, remaining))
             except (ValueError, IndexError, KeyError, TypeError, urllib.error.URLError, TimeoutError):
@@ -315,6 +380,8 @@ def burst_drafts(store, records, catalog, vision):
                     group["description"] = description
                     break
             group["source"] = "in-house photo review"
+            if answer.get("words"):
+                group["visible_words"] = answer["words"]
             preferred = answer["cover"]
             eligible = [p["index"] for p in group["photos"] if p["role"] == "product" and
                         not closeup_label(records[p["index"]], catalog)]
@@ -325,12 +392,14 @@ def burst_drafts(store, records, catalog, vision):
             selected = ({preferred, *answer["angles"]} & set(eligible)) if preferred is not None else set()
             # Other photos stay available in the private group until their gallery eligibility is checked.
             for entry in group["photos"]:
+                if entry["index"] not in indices:
+                    continue
                 if entry["index"] not in eligible and closeup_label(records[entry["index"]], catalog):
                     entry["role"] = "label"
                 entry["cover"] = entry["index"] == preferred
                 if entry["role"] == "product" and entry["index"] not in selected:
                     entry["role"] = "accessory"
-    return match_package_assets(store, groups, records, catalog)
+    return match_package_assets(store, reconcile_serials(groups, records), records, catalog)
 
 
 def closeup_label(record, catalog):
@@ -448,6 +517,57 @@ def renditions(store, record):
             Path(pending).unlink(missing_ok=True)
 
 
+def search_photo(group, records):
+    eligible = [entry for entry in group["photos"] if entry["role"] == "product" and
+                not records[entry["index"]]["sensitive"] and not records[entry["index"]]["tokens"]]
+    if not eligible:
+        return None
+    entry = max(eligible, key=lambda p: (bool(p.get("cover")), records[p["index"]]["score"]))
+    return records[entry["index"]]
+
+
+def visual_signature(image):
+    pixels = list(safe_crop(image).convert("L").resize((9, 8), Image.Resampling.LANCZOS).getdata())
+    return sum((pixels[y * 9 + x] > pixels[y * 9 + x + 1]) << (y * 8 + x)
+               for y in range(8) for x in range(8))
+
+
+def visual_references(store):
+    references = []
+    for item in store.reference_drafts():
+        url = next((url for url in item["identity_sources"] if store_host(url)), None)
+        if url and (code := model_term(item["identity"])):
+            try:
+                signature = visual_signature(photo(store.root / "uploads" / item["cover"]))
+            except (OSError, ValueError):
+                continue
+            references.append((signature, {"model": code, "title": item["title"], "url": url}))
+    return references
+
+
+def appearance_query(store, group, record, vision, deadline):
+    kind = re.sub(r"[^a-z ]", "", group["type"].lower()).strip()
+    if kind not in {title.lower() for _, title, _ in VISUAL_COPY}:
+        return ""
+    visible = " ".join([group.get("visible_words", ""), record["text"] or ""]).lower()
+    brands = [brand for brand in PUBLIC_BRANDS if re.search(r"\b" + brand + r"\b", visible)]
+    brand = brands[0] if len(brands) == 1 else ""
+    features = []
+    remaining = deadline - time.monotonic()
+    if vision and not brand and remaining > 2:
+        try:
+            clue = vision.product_clues(safe_crop(photo(store.root / "uploads" / record["id"])),
+                                        timeout=min(20, remaining))
+            observed = re.sub(r"[^a-z ]", " ", clue["brand"].lower()).strip()
+            if observed in PUBLIC_BRANDS:
+                brand = observed
+            features = [value for raw in clue["features"][:4]
+                        if (value := re.sub(r"[^a-z ]", " ", raw.lower()).strip()) in PUBLIC_FEATURES]
+        except (ValueError, TypeError, AttributeError, KeyError, OSError):
+            logging.info("Photo clues were unavailable for a product search.")
+    return " ".join(part for part in (brand, kind, *dict.fromkeys(features)) if part)
+
+
 def checks(fields):
     issues = []
     if fields["uncertain"]:
@@ -502,6 +622,8 @@ def compile_draft(store, group, records, catalog, source, resolution=None):
               "price": price, "price_override": False, "uncertain": group["uncertain"], "gallery": photo_ids,
               "cover": photo_ids[0] if photo_ids else None, "photo_reviewed": False,
               "source": source, "identity_sources": item.get("identity_sources", []) if item else [],
+              "grouping_basis": group.get("grouping_basis", "Capture-time suggestion"),
+              "model_candidates": group.get("model_candidates", []),
               "photos": [{"id": r["id"], "name": r["name"], "role": role,
                                              "blocked": r["sensitive"] or bool(r["tokens"]) or role == "label",
                                              "excluded": r["id"] not in photo_ids} for r, role in rows]}
@@ -558,10 +680,27 @@ def process(store, batch, lease, files, catalog, grouping=gemini_groups, researc
     with ThreadPoolExecutor(max_workers=4) as pool:
         records = list(pool.map(lambda row: review_photo(store, row), files))
     store.progress(batch, lease, "Grouping products and selecting covers…")
-    groups, source = None, "capture-time suggestions"
+    groups, source, local = None, "capture-time suggestions", None
+    refresh = store.refresh_inputs(batch)
     try:
         local = LocalVision.from_environment() if grouping is gemini_groups else None
-        if local:
+        if refresh is not None:
+            groups = []
+            positions = {record["id"]: i for i, record in enumerate(records)}
+            for ident, previous, original in refresh:
+                indices = [positions[entry["id"]] for entry in previous["photos"] if entry["id"] in positions]
+                if len(indices) != len(previous["photos"]) or not indices:
+                    continue
+                group, = burst_drafts(store, [records[i] for i in indices], catalog, local, single_item=True)
+                for entry in group["photos"]:
+                    entry["index"] = indices[entry["index"]]
+                group.update(uncertain=previous["uncertain"],
+                             grouping_basis=previous.get("grouping_basis", "Existing photo assignment"),
+                             refresh_input=(ident, previous, original))
+                groups.append(group)
+        elif store.single_item(batch):
+            groups = burst_drafts(store, records, catalog, local, single_item=True)
+        elif local:
             strategy = os.getenv("MOE_VISION_STRATEGY", "burst")
             groups = (burst_drafts(store, records, catalog, local) if strategy == "burst"
                       else local.group(store, records, validate_groups))
@@ -571,16 +710,72 @@ def process(store, batch, lease, files, catalog, grouping=gemini_groups, researc
                 source = "vision"
     except (ValueError, KeyError, TypeError, IndexError, urllib.error.URLError, TimeoutError):
         logging.warning("Vision grouping unavailable, using tentative capture-time suggestions.")
-    if not groups:
-        groups = burst_drafts(store, records, catalog, None)
+    if refresh is not None and groups is None:
+        raise ValueError("Could not safely recheck the existing photo assignments.")
+    if not groups and refresh is None:
+        groups = burst_drafts(store, records, catalog, None, single_item=store.single_item(batch))
     store.progress(batch, lease, "Checking product details and current retail offers…")
     resolutions = resolve_products(store, groups, records, catalog, research)
+    if local and grouping is gemini_groups:
+        deadline = time.monotonic() + 85
+        by_query = {}
+        references = visual_references(store) if any(not item for item, _ in resolutions) else []
+        for group, (item, _) in zip(groups, resolutions, strict=True):
+            if not item and time.monotonic() < deadline:
+                record = search_photo(group, records)
+                if not record:
+                    continue
+                if references:
+                    try:
+                        signature = visual_signature(photo(store.root / "uploads" / record["id"]))
+                        group["model_candidates"] = [candidate for ref, candidate in references
+                                                     if (signature ^ ref).bit_count() <= 5][:3]
+                    except (OSError, ValueError):
+                        pass
+                query = appearance_query(store, group, record, local, deadline)
+                if query:
+                    by_query.setdefault(query, []).append(group)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            queries = tuple(by_query)
+            for query, candidates in zip(queries, pool.map(lambda q: appearance_candidates(q, deadline), queries),
+                                         strict=True):
+                for group in by_query[query]:
+                    all_candidates = [*group.get("model_candidates", []), *candidates]
+                    group["model_candidates"] = list({c["model"]: c for c in all_candidates}.values())[:5]
     store.progress(batch, lease, "Writing drafts and preparing listing photos…")
-    drafts = [compile_draft(store, g, records, catalog, g.get("source", source), resolution)
-              for g, resolution in zip(groups, resolutions, strict=True)]
+    drafts = []
+    for group, resolution in zip(groups, resolutions, strict=True):
+        draft = compile_draft(store, group, records, catalog, group.get("source", source), resolution)
+        if refresh is not None:
+            ident, previous, original = group["refresh_input"]
+            preserve_refresh(draft, previous, original)
+            draft["refresh_id"] = ident
+        drafts.append(draft)
     modes = {d["source"] for d in drafts}
     evaluation = next(iter(modes)) if len(modes) == 1 else "in-house review with capture-time suggestions"
     store.finish(batch, lease, drafts, evaluation)
+
+
+def preserve_refresh(draft, previous, original):
+    for name in ("title", "description", "condition", "condition_confirmed", "uncertain"):
+        if previous.get(name) != original.get(name):
+            draft[name] = previous[name]
+    if previous.get("price_override") or draft["condition"] != "New" or (
+            draft["price_cents"] is None and previous.get("price_cents") is not None):
+        for name in ("price", "price_cents", "price_override"):
+            draft[name] = previous[name]
+    if not draft["identity_sources"] and previous.get("identity") != "Variant unconfirmed":
+        for name in ("identity", "identity_sources", "specs"):
+            draft[name] = previous[name]
+    if previous.get("photo_reviewed") or any(previous[name] != original.get(name) for name in ("gallery", "cover")):
+        eligible = {entry["id"] for entry in draft["photos"] if not entry["blocked"]}
+        draft["gallery"] = [ident for ident in previous["gallery"] if ident in eligible]
+        draft["cover"] = (previous["cover"] if previous["cover"] in draft["gallery"]
+                          else next(iter(draft["gallery"]), None))
+        draft["photo_reviewed"] = previous.get("photo_reviewed", False) and draft["gallery"] == previous["gallery"]
+        for entry in draft["photos"]:
+            entry["excluded"] = entry["id"] not in draft["gallery"]
+    draft["issues"] = checks(draft)
 
 
 def changes_for(draft, body):

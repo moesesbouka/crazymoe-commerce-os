@@ -3,6 +3,8 @@ import { connectWorkbench, resumeStorageKey, workbenchRequest, workbenchUrl } fr
 const $ = (id) => document.getElementById(id);
 let view = "upload", activeBatch = null, editorDraft = null, cover = null, gallery = [];
 let sending = false, poll = null, batchRows = [], resumeBatchId = null;
+let singleItemSelection = false;
+let stagedUploads;
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
 function el(tag, text, className) {
@@ -125,7 +127,8 @@ async function refreshBatches() {
 async function openBatch(id) {
   activeBatch = await api("/api/batches/" + id);
   if (activeBatch.state === "receiving") {
-    drawReceipt(activeBatch);
+    const batch = activeBatch;
+    drawReceipt(batch, Boolean(await cachedUpload(batch.id)));
     go("upload");
   } else {
     go("inventory");
@@ -150,7 +153,7 @@ function schedulePoll() {
   }, 1500);
 }
 
-function drawReceipt(batch) {
+function drawReceipt(batch, savedLocally = false) {
   const receipt = el("div", "", "receipt");
   const accepted = batch.files.filter((file) => file.state === "accepted").length;
   const skipped = batch.files.filter((file) => ["rejected", "duplicate", "skipped"].includes(file.state));
@@ -162,26 +165,20 @@ function drawReceipt(batch) {
                     (batch.files.length - accepted - skipped.length) + " pending"), progress);
   if (!sending && batch.state === "receiving") {
     const pending = batch.files.length - accepted - skipped.length;
-    receipt.append(el("p", "The photo picker will open. Choose the original " + batch.files.length +
+    receipt.append(el("p", savedLocally ? "The remaining photos are saved on this device." :
+      "The photo picker will open. Choose the original " + batch.files.length +
       " photos again or all " + pending + " remaining. Studio skips photos it already has."));
-    const resume = el("button", "Choose photos to resume", "primary");
+    const resume = el("button", savedLocally ? "Resume upload" : "Choose photos to resume", "primary");
     resume.type = "button";
     resume.addEventListener("click", () => {
-      resumeBatchId = batch.id;
-      $("photos").click();
+      if (savedLocally) {
+        void resumeCached(batch).catch(report);
+      } else {
+        resumeBatchId = batch.id;
+        $("photos").click();
+      }
     });
     receipt.append(resume);
-    if (accepted) {
-      const commit = el("button", "Process received photos");
-      commit.addEventListener("click", async () => {
-        try {
-          await api("/api/batches/" + batch.id + "/commit", "POST", { allow_incomplete: true });
-          await refreshBatches();
-          await openBatch(batch.id);
-        } catch (error) { report(error); }
-      });
-      receipt.append(commit);
-    }
   }
   if (skipped.length) {
     const details = el("details");
@@ -191,6 +188,43 @@ function drawReceipt(batch) {
     receipt.append(details);
   }
   $("receipt").replaceChildren(receipt);
+}
+
+function uploadCache() {
+  stagedUploads ??= new Promise((resolve, reject) => {
+    const open = indexedDB.open("crazy-moe-photo-uploads", 1);
+    open.onupgradeneeded = () => open.result.createObjectStore("uploads");
+    open.onsuccess = () => resolve(open.result);
+    open.onerror = () => reject(open.error);
+    open.onblocked = () => reject(new Error("Local upload storage is busy."));
+  });
+  return stagedUploads;
+}
+
+async function cachedUpload(batch, value) {
+  try {
+    const db = await uploadCache();
+    const key = resumeStorageKey() + ":" + batch;
+    return await new Promise((resolve, reject) => {
+      const transaction = db.transaction("uploads", value === undefined ? "readonly" : "readwrite");
+      const cache = transaction.objectStore("uploads");
+      const request = value === undefined ? cache.get(key) : value ? cache.put(value, key) : cache.delete(key);
+      transaction.oncomplete = () => resolve(request.result);
+      transaction.onabort = () => reject(transaction.error);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function resumeCached(batch) {
+  const staged = await cachedUpload(batch.id);
+  if (sending || activeBatch?.id !== batch.id) return;
+  if (staged && matchSelection(batch, staged)) {
+    await startUpload([], batch.id, batch.single_item, staged);
+  } else {
+    drawReceipt(batch);
+  }
 }
 
 function getResume() {
@@ -216,58 +250,60 @@ function matchSelection(batch, hashed) {
   return matched;
 }
 
-async function openUpload(hashed, targetId, explicitResume) {
+async function openUpload(hashed, targetId, explicitResume, singleItem = false) {
   if (targetId) {
     const batch = await uploadRequest("/api/batches/" + targetId);
     if (explicitResume && batch.state !== "receiving") return { batch, matched: [] };
     const matched = matchSelection(batch, hashed);
-    if (matched) return { batch, matched };
+    if (matched && (explicitResume || Boolean(batch.single_item) === singleItem)) return { batch, matched };
     if (explicitResume) {
       throw new Error("The selection did not match. Choose the same " + batch.files.length +
         " originals or all " + batch.files.filter((file) => file.state === "pending").length + " remaining photos.");
     }
   }
   const previous = getResume();
-  const original = JSON.stringify(hashed.map((row) => row.receipt));
+  const receiptSignature = (manifest) => JSON.stringify(singleItem ? { manifest, singleItem } : manifest);
+  const original = receiptSignature(hashed.map((row) => row.receipt));
   if (!previous.some((row) => row.signature === original)) {
     hashed.sort((a, b) => a.receipt.sha.localeCompare(b.receipt.sha) ||
       a.receipt.name.localeCompare(b.receipt.name));
   }
   const manifest = hashed.map((row) => row.receipt);
-  const signature = JSON.stringify(manifest);
+  const signature = receiptSignature(manifest);
   const key = previous.find((row) => row.signature === signature)?.key || crypto.randomUUID();
   try {
     localStorage.setItem(resumeStorageKey(), JSON.stringify([{ signature, key }, ...previous.filter((r) => r.key !== key)].slice(0, 12)));
   } catch { /* The server batch can still be resumed without local storage. */ }
-  const batch = await uploadRequest("/api/batches", "POST", { key, files: manifest });
+  const batch = await uploadRequest("/api/batches", "POST", { key, files: manifest, single_item: singleItem });
   return { batch, matched: matchSelection(batch, hashed) };
 }
 
-async function startUpload(selection, explicitResume = null) {
-  if (sending || !selection.length) return;
+async function startUpload(selection, explicitResume = null, singleItem = false, staged = null) {
+  if (sending || (!selection.length && !staged)) return;
   const files = Array.from(selection);
   if (files.length > 100 || files.some((file) => file.size < 1 || file.size > 24 * 1024 ** 2)) {
     report("Choose up to 100 nonempty photos, each 24 MB or smaller.");
     return;
   }
   sending = true;
-  $("choose").disabled = true;
+  $("choose").disabled = $("choose-one").disabled = true;
   const target = explicitResume || (activeBatch?.state === "receiving" ? activeBatch.id : null);
   let current;
   try {
     report("Checking photo integrity before upload…");
-    const hashed = [];
+    const hashed = staged ?? [];
     for (const file of files) {
       const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer()));
       const sha = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
       hashed.push({ file, receipt: { name: file.name, size: file.size, sha } });
     }
-    const { batch, matched } = await openUpload(hashed, target, Boolean(explicitResume));
+    const { batch, matched } = await openUpload(hashed, target, Boolean(explicitResume), singleItem);
     current = batch;
     activeBatch = batch;
     drawReceipt(current);
     report("");
     if (current.state === "receiving") {
+      if (!staged) await cachedUpload(batch.id, hashed);
       for (const { file, saved } of matched) {
         while (saved.offset < saved.size && saved.state === "pending") {
           const chunk = file.slice(saved.offset, saved.offset + 1024 ** 2);
@@ -278,6 +314,7 @@ async function startUpload(selection, explicitResume = null) {
         }
       }
     }
+    await cachedUpload(batch.id, null);
     await refreshBatches();
     await openBatch(current.id);
   } catch (error) {
@@ -286,8 +323,8 @@ async function startUpload(selection, explicitResume = null) {
       "Upload stopped. Accepted chunks are saved. " + error.message);
   } finally {
     sending = false;
-    $("choose").disabled = false;
-    if (current && view === "upload") drawReceipt(current);
+    $("choose").disabled = $("choose-one").disabled = false;
+    if (current && view === "upload") drawReceipt(current, Boolean(await cachedUpload(current.id)));
   }
 }
 
@@ -327,6 +364,21 @@ function drawInventory() {
                        ready + " ready", (drafts.length - ready) + " need review"]) $("counts").append(el("span", label));
   if (batch.evaluation?.includes("capture-time") || batch.evaluation === "manual grouping required") {
     $("counts").append(el("span", "Some groups use capture times and need a photo check"));
+  }
+  if (drafts.some((draft) => !draft.approval)) {
+    const refresh = el("button", "Recheck unapproved drafts");
+    refresh.type = "button";
+    refresh.addEventListener("click", async () => {
+      refresh.disabled = true;
+      try {
+        await api("/api/batches/" + batch.id + "/refresh", "POST", {});
+        await openBatch(batch.id);
+      } catch (error) {
+        report(error);
+        refresh.disabled = false;
+      }
+    });
+    $("counts").append(refresh);
   }
   const filter = $("filter").value;
   const visible = drafts.filter((draft) => filter === "all" ||
@@ -383,6 +435,20 @@ function renderEvidence(draft) {
   const details = el("details");
   details.append(el("summary", "Private evidence"), el("p", draft.identity),
                  el("p", draft.price_override ? "Seller-set price" : draft.price.basis));
+  if (draft.grouping_basis) details.append(el("p", draft.grouping_basis));
+  if (draft.model_candidates?.length) {
+    const list = el("ul");
+    for (const candidate of draft.model_candidates) {
+      const link = el("a", candidate.model + " · " + candidate.title);
+      link.href = candidate.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      const row = el("li");
+      row.append(link);
+      list.append(row);
+    }
+    details.append(el("p", "Possible models from appearance. Check the label to verify the exact model."), list);
+  }
   if (draft.price.conditional_cents && !draft.price_override) {
     const use = el("button", "Use " + formatMoney(draft.price.conditional_cents) + " if " + draft.price.variant + " and New");
     use.type = "button";
@@ -522,11 +588,13 @@ async function renderChannels() {
 
 document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => { report(""); go(button.dataset.view); }));
 $("photos").addEventListener("change", (event) => {
-  startUpload(event.target.files, resumeBatchId);
+  startUpload(event.target.files, resumeBatchId, singleItemSelection);
   resumeBatchId = null;
+  singleItemSelection = false;
   event.target.value = "";
 });
-$("choose").addEventListener("click", () => { resumeBatchId = null; $("photos").click(); });
+$("choose").addEventListener("click", () => { resumeBatchId = null; singleItemSelection = false; $("photos").click(); });
+$("choose-one").addEventListener("click", () => { resumeBatchId = null; singleItemSelection = true; $("photos").click(); });
 $("drop").addEventListener("dragover", (event) => { event.preventDefault(); $("drop").classList.add("is-drag"); });
 $("drop").addEventListener("dragleave", () => $("drop").classList.remove("is-drag"));
 $("drop").addEventListener("drop", (event) => { event.preventDefault(); $("drop").classList.remove("is-drag"); startUpload(event.dataTransfer.files); });
@@ -543,6 +611,9 @@ connectWorkbench(() => refreshBatches().then(async () => {
   activeBatch = await api("/api/batches/" + recent.id);
   if (recent.state === "receiving") {
     drawReceipt(activeBatch);
+    await resumeCached(activeBatch);
+  } else {
+    await cachedUpload(recent.id, null);
   }
   renderBatches();
   schedulePoll();

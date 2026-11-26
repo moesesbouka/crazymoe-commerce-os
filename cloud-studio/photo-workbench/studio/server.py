@@ -156,10 +156,10 @@ class Handler(BaseHTTPRequestHandler):
         store = self.server.store
         method = self.command
         path = urllib.parse.urlsplit(self.path).path
-        standalone_assets = {"/": "index.html", "/app.js": "app.js", "/studio.css": "studio.css"}
         portal_assets = {"/": "photo-workbench.html", "/photo-workbench.css": "photo-workbench.css",
                          "/photo-workbench-app.js": "photo-workbench-app.js",
                          "/photo-workbench-connect.js": "photo-workbench-connect.js"}
+        standalone_assets = {**portal_assets, "/": "index.html", "/app.js": "app.js", "/studio.css": "studio.css"}
         assets, web_root = ((standalone_assets, STANDALONE_WEB) if STANDALONE_WEB.is_dir()
                             else (portal_assets, PORTAL_WEB))
         if method == "GET" and path in assets:
@@ -171,18 +171,23 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(store.batches())
         if path == "/api/batches" and method == "POST":
             data = self.read_json()
-            return self.reply(store.batch(store.create(data.get("key"), data.get("files"))), 201)
-        match = re.fullmatch(rf"/api/batches/({ID})(?:/(commit|retry|files)/?({ID})?)?", path)
+            return self.reply(store.batch(store.create(data.get("key"), data.get("files"),
+                                                       data.get("single_item", False))), 201)
+        match = re.fullmatch(rf"/api/batches/({ID})(?:/(commit|retry|refresh|files)/?({ID})?)?", path)
         if match:
             batch, action, asset = match.groups()
             if method == "GET" and not action:
                 return self.reply(store.batch(batch))
             if method == "POST" and action == "commit" and not asset:
-                store.commit_batch(batch, self.read_json().get("allow_incomplete") is True)
+                self.read_json()
+                store.commit_batch(batch)
                 return self.reply(store.batch(batch))
             if method == "POST" and action == "retry" and not asset:
                 store.retry(batch)
                 return self.reply(store.batch(batch))
+            if method == "POST" and action == "refresh" and not asset:
+                store.refresh(batch)
+                return self.reply(store.batch(batch), 202)
             if method == "PUT" and action == "files" and asset:
                 try:
                     offset = int(self.headers.get("Upload-Offset", ""))
