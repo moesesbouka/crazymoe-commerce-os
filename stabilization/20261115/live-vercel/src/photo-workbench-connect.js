@@ -26,12 +26,12 @@ export async function workbenchRequest(path, options = {}) {
   try {
     return await fetch(workbenchUrl(path), {
       ...options, cache: "no-store", redirect: "error", referrerPolicy: "no-referrer",
-      signal: AbortSignal.timeout(60_000),
+      signal: options.signal ?? AbortSignal.timeout(60_000),
       ...(workerOrigin && { credentials: "omit", targetAddressSpace: "local" }),
     });
   } catch (error) {
     if (!workerOrigin) throw error;
-    throw new Error("Could not reach the photo workbench. Check Tailscale, the AI desktop, and Chrome’s local network permission, then retry.");
+    throw new Error("Could not reach the photo workbench. Check Tailscale, the AI desktop, and Chrome’s local network permission, then retry.", { cause: error });
   }
 }
 

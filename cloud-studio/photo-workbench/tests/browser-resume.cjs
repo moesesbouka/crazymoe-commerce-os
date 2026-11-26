@@ -20,9 +20,17 @@ async function verify() {
     const first = await context.newPage();
     await first.goto(start);
     let uploads = 0;
-    await first.route("**/api/batches/*/files/*", (route) => {
+    let lostReceipt;
+    await first.route("**/api/batches/*/files/*", async (route) => {
       uploads++;
-      return uploads > 7 ? route.abort("internetdisconnected") : route.continue();
+      if (uploads === 3) {
+        const committed = await route.fetch();
+        assert.equal(committed.status(), 200);
+        lostReceipt = route.request().url();
+        return route.fulfill({ status: 502, contentType: "text/plain", body: "Temporary upstream failure" });
+      }
+      if (uploads === 4) assert.equal(route.request().url(), lostReceipt);
+      return uploads > 8 ? route.abort("internetdisconnected") : route.continue();
     });
     await first.locator("#photos").setInputFiles(photos);
     await first.getByText(/Upload stopped. Accepted chunks are saved/).waitFor({ timeout: 30000 });
@@ -30,21 +38,27 @@ async function verify() {
     const initial = await (await context.request.get(start + "/api/batches")).json();
     const batch = initial.find((row) => row.photos === 64);
     assert.ok(batch);
-    await first.close();
-    const second = await context.newPage();
+    await context.close();
+    const reopened = await browser.newContext({ isMobile: true, hasTouch: true, viewport: { width: 390, height: 844 } });
+    const second = await reopened.newPage();
     await second.goto(start);
-    await second.locator("#photos").setInputFiles([...photos].reverse());
+    const paused = await (await reopened.request.get(start + "/api/batches/" + batch.id)).json();
+    const missing = new Set(paused.files.filter(file => file.state === "pending").map(file => file.name));
+    assert.equal(missing.size, 57);
+    const picker = second.waitForEvent("filechooser");
+    await second.getByRole("button", { name: "Choose photos to resume" }).click();
+    await (await picker).setFiles(photos.filter(photo => missing.has(photo.name)).reverse());
     const deadline = Date.now() + 30000;
     let receipt;
     do {
-      receipt = await (await context.request.get(start + "/api/batches/" + batch.id)).json();
+      receipt = await (await reopened.request.get(start + "/api/batches/" + batch.id)).json();
       if (receipt.files.every((file) => file.state === "accepted")) break;
       await new Promise((resolve) => setTimeout(resolve, 200));
     } while (Date.now() < deadline);
     assert.equal(receipt.files.filter((file) => file.state === "accepted").length, 64);
-    const final = await (await context.request.get(start + "/api/batches")).json();
+    const final = await (await reopened.request.get(start + "/api/batches")).json();
     assert.deepEqual(final.filter((row) => row.photos === 64).map((row) => row.id), [batch.id]);
-    console.log("64-photo browser test resumed the existing batch after interruption, tab close and reordered selection.");
+    console.log("64-photo browser test retried a lost receipt and resumed the same batch from a new browser context using only the remaining photos in reverse order.");
   } finally {
     await browser.close();
   }

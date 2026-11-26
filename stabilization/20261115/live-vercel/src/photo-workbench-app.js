@@ -2,7 +2,7 @@ import { connectWorkbench, resumeStorageKey, workbenchRequest, workbenchUrl } fr
 
 const $ = (id) => document.getElementById(id);
 let view = "upload", activeBatch = null, editorDraft = null, cover = null, gallery = [];
-let sending = false, poll = null, batchRows = [];
+let sending = false, poll = null, batchRows = [], resumeBatchId = null;
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
 function el(tag, text, className) {
@@ -12,8 +12,15 @@ function el(tag, text, className) {
   return node;
 }
 
-async function api(path, method = "GET", data = null, headers = {}) {
-  const options = { method, headers, cache: "no-store" };
+class StudioRequestError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function api(path, method = "GET", data = null, headers = {}, signal) {
+  const options = { method, headers, cache: "no-store", signal };
   if (data !== null) {
     if (data instanceof Blob) options.body = data;
     else {
@@ -24,10 +31,27 @@ async function api(path, method = "GET", data = null, headers = {}) {
   const response = await workbenchRequest(path, options);
   const type = response.headers.get("Content-Type") || "";
   if (!response.ok) {
-    const detail = type.includes("json") ? (await response.json()).error : "Studio is unavailable.";
-    throw new Error(detail);
+    const detail = type.includes("json") ? (await response.json().catch(() => null))?.error : null;
+    throw new StudioRequestError(detail || "Studio returned HTTP " + response.status + ".", response.status);
   }
   return type.includes("zip") ? response.blob() : response.json();
+}
+
+async function uploadRequest(path, method, data, headers) {
+  const waits = [1000, 2000, 4000, 8000];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const result = await api(path, method, data, headers, AbortSignal.timeout(35000));
+      if (attempt) report("");
+      return result;
+    } catch (error) {
+      const retryable = [408, 429, 500, 502, 503, 504].includes(error.status) ||
+        ["TypeError", "TimeoutError", "SyntaxError"].includes((error.cause ?? error).name);
+      if (!retryable || attempt === waits.length) throw error;
+      report("Connection interrupted. Retrying from the saved upload receipt…");
+      await new Promise((resolve) => setTimeout(resolve, waits[attempt]));
+    }
+  }
 }
 
 function report(error) {
@@ -137,7 +161,16 @@ function drawReceipt(batch) {
   receipt.append(el("strong", accepted + " received · " + skipped.length + " skipped · " +
                     (batch.files.length - accepted - skipped.length) + " pending"), progress);
   if (!sending && batch.state === "receiving") {
-    receipt.append(el("p", "Select the same photos again to resume from the saved receipts."));
+    const pending = batch.files.length - accepted - skipped.length;
+    receipt.append(el("p", "The photo picker will open. Choose the original " + batch.files.length +
+      " photos again or all " + pending + " remaining. Studio skips photos it already has."));
+    const resume = el("button", "Choose photos to resume", "primary");
+    resume.type = "button";
+    resume.addEventListener("click", () => {
+      resumeBatchId = batch.id;
+      $("photos").click();
+    });
+    receipt.append(resume);
     if (accepted) {
       const commit = el("button", "Process received photos");
       commit.addEventListener("click", async () => {
@@ -161,11 +194,56 @@ function drawReceipt(batch) {
 }
 
 function getResume() {
-  try { return JSON.parse(localStorage.getItem(resumeStorageKey())) || []; }
+  try {
+    const saved = JSON.parse(localStorage.getItem(resumeStorageKey()));
+    return Array.isArray(saved) ? saved : [];
+  }
   catch { return []; }
 }
 
-async function startUpload(selection) {
+function matchSelection(batch, hashed) {
+  const pending = batch.files.filter((file) => file.state === "pending");
+  const targets = hashed.length === batch.files.length ? batch.files : pending;
+  if (targets.length !== hashed.length) return null;
+  const available = [...hashed];
+  const matched = [];
+  for (const saved of targets) {
+    const index = available.findIndex(({ receipt }) => receipt.sha === saved.sha && receipt.size === saved.size);
+    if (index < 0) return null;
+    const [{ file }] = available.splice(index, 1);
+    matched.push({ file, saved });
+  }
+  return matched;
+}
+
+async function openUpload(hashed, targetId, explicitResume) {
+  if (targetId) {
+    const batch = await uploadRequest("/api/batches/" + targetId);
+    if (explicitResume && batch.state !== "receiving") return { batch, matched: [] };
+    const matched = matchSelection(batch, hashed);
+    if (matched) return { batch, matched };
+    if (explicitResume) {
+      throw new Error("The selection did not match. Choose the same " + batch.files.length +
+        " originals or all " + batch.files.filter((file) => file.state === "pending").length + " remaining photos.");
+    }
+  }
+  const previous = getResume();
+  const original = JSON.stringify(hashed.map((row) => row.receipt));
+  if (!previous.some((row) => row.signature === original)) {
+    hashed.sort((a, b) => a.receipt.sha.localeCompare(b.receipt.sha) ||
+      a.receipt.name.localeCompare(b.receipt.name));
+  }
+  const manifest = hashed.map((row) => row.receipt);
+  const signature = JSON.stringify(manifest);
+  const key = previous.find((row) => row.signature === signature)?.key || crypto.randomUUID();
+  try {
+    localStorage.setItem(resumeStorageKey(), JSON.stringify([{ signature, key }, ...previous.filter((r) => r.key !== key)].slice(0, 12)));
+  } catch { /* The server batch can still be resumed without local storage. */ }
+  const batch = await uploadRequest("/api/batches", "POST", { key, files: manifest });
+  return { batch, matched: matchSelection(batch, hashed) };
+}
+
+async function startUpload(selection, explicitResume = null) {
   if (sending || !selection.length) return;
   const files = Array.from(selection);
   if (files.length > 100 || files.some((file) => file.size < 1 || file.size > 24 * 1024 ** 2)) {
@@ -174,6 +252,7 @@ async function startUpload(selection) {
   }
   sending = true;
   $("choose").disabled = true;
+  const target = explicitResume || (activeBatch?.state === "receiving" ? activeBatch.id : null);
   let current;
   try {
     report("Checking photo integrity before upload…");
@@ -183,26 +262,16 @@ async function startUpload(selection) {
       const sha = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
       hashed.push({ file, receipt: { name: file.name, size: file.size, sha } });
     }
-    const previous = getResume();
-    const original = JSON.stringify(hashed.map((row) => row.receipt));
-    if (!previous.some((row) => row.signature === original)) {
-      hashed.sort((a, b) => a.receipt.sha.localeCompare(b.receipt.sha) ||
-        a.receipt.name.localeCompare(b.receipt.name));
-    }
-    const manifest = hashed.map((row) => row.receipt);
-    const manifestKey = JSON.stringify(manifest);
-    const known = previous.find((row) => row.signature === manifestKey);
-    const key = known?.key || crypto.randomUUID();
-    localStorage.setItem(resumeStorageKey(), JSON.stringify([{ signature: manifestKey, key }, ...previous.filter((r) => r.key !== key)].slice(0, 12)));
-    current = await api("/api/batches", "POST", { key, files: manifest });
+    const { batch, matched } = await openUpload(hashed, target, Boolean(explicitResume));
+    current = batch;
+    activeBatch = batch;
     drawReceipt(current);
     report("");
     if (current.state === "receiving") {
-      for (const [index, { file }] of hashed.entries()) {
-        const saved = current.files[index];
+      for (const { file, saved } of matched) {
         while (saved.offset < saved.size && saved.state === "pending") {
           const chunk = file.slice(saved.offset, saved.offset + 1024 ** 2);
-          const update = await api("/api/batches/" + current.id + "/files/" + saved.id, "PUT",
+          const update = await uploadRequest("/api/batches/" + current.id + "/files/" + saved.id, "PUT",
                                    chunk, { "Upload-Offset": String(saved.offset) });
           Object.assign(saved, update);
           drawReceipt(current);
@@ -212,7 +281,9 @@ async function startUpload(selection) {
     await refreshBatches();
     await openBatch(current.id);
   } catch (error) {
-    report("Upload stopped. Accepted chunks are saved. " + error.message);
+    const complete = current?.files.every((file) => file.state !== "pending");
+    report(complete ? "Photos are saved. Reopen this batch to check processing." :
+      "Upload stopped. Accepted chunks are saved. " + error.message);
   } finally {
     sending = false;
     $("choose").disabled = false;
@@ -450,8 +521,12 @@ async function renderChannels() {
 }
 
 document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => { report(""); go(button.dataset.view); }));
-$("photos").addEventListener("change", (event) => { startUpload(event.target.files); event.target.value = ""; });
-$("choose").addEventListener("click", () => $("photos").click());
+$("photos").addEventListener("change", (event) => {
+  startUpload(event.target.files, resumeBatchId);
+  resumeBatchId = null;
+  event.target.value = "";
+});
+$("choose").addEventListener("click", () => { resumeBatchId = null; $("photos").click(); });
 $("drop").addEventListener("dragover", (event) => { event.preventDefault(); $("drop").classList.add("is-drag"); });
 $("drop").addEventListener("dragleave", () => $("drop").classList.remove("is-drag"));
 $("drop").addEventListener("drop", (event) => { event.preventDefault(); $("drop").classList.remove("is-drag"); startUpload(event.dataTransfer.files); });
