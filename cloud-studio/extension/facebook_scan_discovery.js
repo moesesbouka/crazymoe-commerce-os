@@ -18,38 +18,91 @@ function facebookSellingProfile() {
   return profiles.values().next().value;
 }
 
-function parseFacebookSellingPage(body) {
-  const readable = body.replace(/^\s*for\s*\(\s*;;\s*\)\s*;?\s*/, "").trim();
+const SELLING_FIELDS = new Set([
+  "marketplace_listing_sets", "marketplace_listings", "marketplace_seller_listings",
+  "marketplace_listing_management", "marketplace_listing_management_listings", "seller_listings"
+]);
+const SELLING_WRAPPERS = new Set(["marketplace_listing_set", "listing_set", "listing_sets", "active_listings", "listings", "items"]);
+const STRUCTURAL_FIELDS = new Set([
+  "data", "payload", "viewer", "node", "seller", "marketplace", "marketplace_listing_set",
+  "listing_set", "listing_sets", "active_listings", "listings", "items", "edges", "page_info",
+  "has_next_page", "end_cursor", ...SELLING_FIELDS, ...SELLING_WRAPPERS
+]);
+
+function readSellingRecords(body) {
+  const stripPrefix = text => text.replace(/^\s*for\s*\(\s*;;\s*\)\s*;?\s*/, "").trim();
+  const readable = stripPrefix(body);
   try {
-    const records = (() => {
-      try { return [JSON.parse(readable)]; }
-      catch { return readable.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line)); }
-    })();
-    const connections = [];
-    const visit = (value, field = "") => {
-      if (!value || typeof value !== "object") return;
-      if (isSellingListingsField(field) && Array.isArray(value.edges) && value.page_info) {
-        connections.push(value);
-        return;
-      }
-      for (const [key, child] of Object.entries(value)) visit(child, key);
-    };
-    for (const record of records.flat()) {
-      if (record.errors?.length) throw Error("Facebook reported an error.");
-      visit(record.data);
-    }
-    if (connections.length !== 1) throw Error("Expected one selling listings feed.");
-    const {edges, page_info: page} = connections[0];
-    if (typeof page.has_next_page !== "boolean" || edges.some(edge => !edge?.node)) throw Error("Invalid listings page.");
-    return {nodes: edges.map(edge => edge.node), hasNext: page.has_next_page, cursor: page.end_cursor};
+    return [JSON.parse(readable)].flat();
   } catch {
-    throw facebookScanError("FACEBOOK_RESPONSE", "Facebook returned an unreadable selling listings page.");
+    return readable.split(/\r?\n/).filter(line => line.trim()).flatMap(line => JSON.parse(stripPrefix(line)));
   }
 }
 
-function isSellingListingsField(field) {
-  return ["marketplace_listing_sets", "marketplace_listings", "marketplace_seller_listings",
-    "marketplace_listing_management", "marketplace_listing_management_listings", "seller_listings"].includes(field);
+function summarizeSellingResponse(records, issue, paths) {
+  const errorCodes = [];
+  for (const record of records) {
+    const errors = record?.errors ?? record?.payload?.errors;
+    for (const error of Array.isArray(errors) ? errors : []) {
+      const code = String(error?.code ?? error?.extensions?.code ?? "");
+      if (/^\d{1,9}$/.test(code) && !errorCodes.includes(code)) errorCodes.push(code);
+    }
+  }
+  return {issue, records: records.length, errorCodes: errorCodes.slice(0, 6), paths: paths.slice(0, 8)};
+}
+
+function sellingResponseError(issue, records = [], paths = []) {
+  const messages = {
+    malformed: "Facebook returned a response that was not readable JSON.",
+    platform_error: "Facebook returned an error instead of the selling feed.",
+    missing_feed: "The response did not contain the expected Facebook selling feed.",
+    ambiguous_feed: "Facebook returned more than one candidate selling feed.",
+    invalid_page: "The Facebook selling feed was missing listings or pagination information."
+  };
+  return Object.assign(facebookScanError("FACEBOOK_RESPONSE", messages[issue]), {
+    diagnostic: summarizeSellingResponse(records, issue, paths)
+  });
+}
+
+function parseFacebookSellingPage(body) {
+  let records;
+  try {
+    records = readSellingRecords(body);
+  } catch {
+    throw sellingResponseError("malformed");
+  }
+  if (!records.length || records.some(record => !record || typeof record !== "object")) {
+    throw sellingResponseError("malformed");
+  }
+  if (records.some(record => record.errors?.length || record.payload?.errors?.length)) throw sellingResponseError("platform_error", records);
+
+  const connections = [];
+  const paths = [];
+  const visit = (value, path, sellingScope) => {
+    if (!value || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, path, sellingScope);
+      return;
+    }
+    if (Object.hasOwn(value, "edges") || Object.hasOwn(value, "page_info")) {
+      if (!paths.includes(path)) paths.push(path);
+      if (sellingScope && Array.isArray(value.edges) && value.page_info) connections.push(value);
+      return;
+    }
+    for (const [key, child] of Object.entries(value)) {
+      visit(child, path + "." + (STRUCTURAL_FIELDS.has(key) ? key : "*"), SELLING_FIELDS.has(key) || (sellingScope && SELLING_WRAPPERS.has(key)));
+    }
+  };
+  for (const record of records) {
+    visit(record.data, "data", false);
+    visit(record.payload?.data, "payload.data", false);
+  }
+  if (connections.length !== 1) throw sellingResponseError(connections.length ? "ambiguous_feed" : "missing_feed", records, paths);
+  const {edges, page_info: page} = connections[0];
+  if (typeof page.has_next_page !== "boolean" || edges.some(edge => !edge?.node)) {
+    throw sellingResponseError("invalid_page", records, paths);
+  }
+  return {nodes: edges.map(edge => edge.node), hasNext: page.has_next_page, cursor: page.end_cursor};
 }
 
 async function discoverFacebookListings({fetchPage, extract, profile, getProfile, report, signal, pause, pageLimit = 300}) {

@@ -49,6 +49,29 @@ test("a cap is partial, and an HTTP 200 with unrelated or unreadable contents fa
   await assert.rejects(discovery(page(["1000000001"],true,"next"),page(["1000000001"],true,"next")).run(),{code:"FACEBOOK_CURSOR"});
 });
 
+test("wrapped selling feeds are accepted and ambiguous or unrelated feeds stay rejected", () => {
+  const scanner=moduleContext("facebook_scan_discovery.js");
+  const feed={edges:[{node:{id:"1000000001"}}],page_info:{has_next_page:false,end_cursor:null}};
+  const wrapped={payload:{data:{viewer:{marketplace_listing_sets:{active_listings:feed}}}}};
+  const result=scanner.parseFacebookSellingPage("for (;;);"+JSON.stringify(wrapped));
+  assert.equal(result.nodes[0].id,"1000000001");
+  assert.equal(result.hasNext,false);
+  const check = (response, diagnostic) => assert.throws(
+    () => scanner.parseFacebookSellingPage(JSON.stringify(response)),
+    error => {
+      assert.equal(error.code,"FACEBOOK_RESPONSE");
+      assert.deepEqual(JSON.parse(JSON.stringify(error.diagnostic)), diagnostic);
+      return true;
+    }
+  );
+  check({data:{seller_listings:{listings:feed,active_listings:feed}}},
+    {issue:"ambiguous_feed",records:1,errorCodes:[],paths:["data.seller_listings.listings","data.seller_listings.active_listings"]});
+  check({data:{private_title_42:feed}},
+    {issue:"missing_feed",records:1,errorCodes:[],paths:["data.*"]});
+  check({errors:[{message:"Private message",code:100},{extensions:{code:"sensitive label"}}]},
+    {issue:"platform_error",records:1,errorCodes:["100"],paths:[]});
+});
+
 test("only the current Facebook viewer is used, and a profile switch during the request fails", async () => {
   const document = {scripts: [{textContent:'{"sellerID":"1900000001"}'}, {textContent:'["CurrentUserInitialData",[],{"USER_ID":"1700000001"}]'}]};
   const scanner = moduleContext("facebook_scan_discovery.js",{document});
