@@ -50,13 +50,14 @@ BURST_SCHEMA = {
     },
 }
 BURST_PROMPT = (
-    "You are checking one possible resale product from warehouse photos. Inspect the numbered grid. "
+    "You are checking one possible resale product from warehouse photos. Inspect every numbered image "
+    "before naming the item. Identify the main object from its shape, controls, connectors and printed wording. "
     "Choose the most clear actual item as cover. Prefer a whole-item, front or three-quarter view. Avoid "
     "label closeups, identifiable people or reflections, boxes without an item, and paperwork. "
     "If it is only accessories choose cover 0. Angles should only include suitable buyer photos. "
-    "Type only what you see, such as two tabletop LED light bars, bathroom scale, feeder, speaker, "
-    "work light, scooter, or bicycle. A bathroom scale has a flat standing platform and a weight display. "
-    "A feeder has a tall housing with an access opening for food. Use visible text as evidence, "
+    "Place a short literal product type in kind, or leave it empty for an unidentifiable object, "
+    "an image projected on a wall, or a closed shipping carton with no readable product name. "
+    "Use visible text as evidence, "
     "transcribe a brand/model only when readable. JSON fields kind, cover, angles, words. "
     "No condition or pricing claims."
 )

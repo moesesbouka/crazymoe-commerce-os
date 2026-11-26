@@ -8,13 +8,14 @@ import urllib.error
 import urllib.request
 import uuid
 import zipfile
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from PIL import Image, ImageDraw, ImageFont
 
 from studio.local_vision import normalized_groups
-from studio.pipeline import BRAND, compile_draft, ocr, process, suggest_price, validate_groups
+from studio.pipeline import BRAND, burst_drafts, catalog_match, compile_draft, ocr, process, suggest_price, validate_groups
 from studio.server import App
 from studio.store import Store
 
@@ -197,6 +198,28 @@ class StudioIntegrationTest(unittest.TestCase):
         answer["groups"][0]["photos"] = [1, 1]
         with self.assertRaises(ValueError):
             validate_groups(normalized_groups(answer, 2), 2)
+
+    def test_burst_rejects_unsupported_feeder_type_and_keeps_safe_angles(self):
+        records = [{"id": f"photo-{i}", "taken": datetime(2026, 11, 26, 12),
+                    "text": "LUMA 400" if i < 2 else "SERIAL", "sensitive": i == 2,
+                    "tokens": set(), "score": 4} for i in range(3)]
+        vision = SimpleNamespace(review_burst=lambda *args, **kwargs: {
+            "kind": "Automatic Pet Feeder", "cover": 0, "angles": [1, 2],
+        })
+        group, = burst_drafts(self.store, records, {}, vision)
+        self.assertEqual("", group["type"])
+        self.assertEqual(["product", "product", "label"], [p["role"] for p in group["photos"]])
+        self.assertTrue(group["photos"][0]["cover"])
+        records[0]["text"] = "Pet feeder"
+        group, = burst_drafts(self.store, records, {}, vision)
+        self.assertEqual("Automatic Pet Feeder", group["type"])
+
+    def test_catalog_keeps_halo_plus_distinct_from_halo(self):
+        item = {"model": "XGIMI HALO+", "identifiers": ["XGIMI HALO+"]}
+        record = {"text": "XGIMI Halo", "tokens": set(), "sensitive": False}
+        self.assertIsNone(catalog_match(self.store, [(record, "product")], {item["model"]: item})[0])
+        record["text"] = "XGIMI Halo+"
+        self.assertEqual(item, catalog_match(self.store, [(record, "product")], {item["model"]: item})[0])
 
     def test_gallery_revision_renders_added_photo_and_rejects_label(self):
         images = [fixture(0), fixture(1), fixture(0, label=True)]

@@ -84,6 +84,10 @@ def review_photo(store, row):
         scan = img.copy()
         scan.thumbnail((2400, 2400))
         codes = {entry.text for entry in zxingcpp.read_barcodes(scan)}
+    if text and (codes or SENSITIVE.search(text)) and not model_tokens(text):
+        alternate = ocr(img.rotate(180))
+        if alternate:
+            text = text + "\n" + alternate
     area = img.copy()
     area.thumbnail((320, 320))
     gray = area.convert("L")
@@ -168,7 +172,7 @@ def load_catalog(path):
 
 
 def identifier_text(value):
-    return re.sub(r"[^A-Z0-9]+", " ", value.upper()).strip()
+    return re.sub(r"[^A-Z0-9]+", " ", value.upper().replace("+", " PLUS ")).strip()
 
 
 def label_detail(store, record, position):
@@ -249,9 +253,25 @@ def catalog_match(store, rows, catalog):
 
 
 VISUAL_COPY = (
+    (r"\bprojector\b", "Portable Projector",
+     "A compact projector with an integrated lens for displaying video on a wall or screen."),
+    (r"\b(?:av|audio video|home theater) receiver\b", "Home Theater AV Receiver",
+     "A home theater receiver with front-panel controls and a display."),
+    (r"\bsound\s*bar\b", "TV Soundbar",
+     "A low-profile soundbar designed to sit below a television."),
+    (r"\b(?:coffee maker|coffee machine|coffee brewer)\b", "Countertop Coffee Maker",
+     "A countertop coffee brewer with a brew basket and water reservoir."),
+    (r"\bice (?:maker|machine)\b", "Countertop Ice Maker",
+     "A compact ice maker designed for countertop use."),
+    (r"\btoilet seat\b", "Toilet Seat",
+     "A toilet seat with a hinged lid."),
+    (r"\bfloor lamp\b", "Floor Lamp",
+     "A freestanding lamp designed for indoor lighting."),
+    (r"\blaser distance measur(?:e|er|ing)\b", "Laser Distance Measure",
+     "A handheld tool for measuring distances with a laser."),
     (r"light bars?|accent bars?", "Tabletop LED Accent Light Bars",
      "Slim light bars with diffused front panels and round tabletop stands."),
-    (r"pet feeder|wet food feeder|automatic feeder|^feeder$", "Automatic Pet Feeder",
+    (r"\b(?:pet feeder|wet food feeder|automatic feeder)\b", "Automatic Pet Feeder",
      "A countertop pet feeder with a covered serving area."),
     (r"work light|utility light", "Portable Work Light",
      "A portable work light with a carry handle and a wide lamp head."),
@@ -282,6 +302,11 @@ def burst_drafts(store, records, catalog, vision):
                 continue
             for pattern, title, description in VISUAL_COPY:
                 if re.search(pattern, answer["kind"], re.I):
+                    if title == "Automatic Pet Feeder" and not any(
+                        re.search(r"\b(?:PETLIBRO|FEEDER|PET FOOD)\b", records[i]["text"] or "", re.I)
+                        for i in indices
+                    ):
+                        break
                     group["type"] = title
                     group["description"] = description
                     break
@@ -293,12 +318,13 @@ def burst_drafts(store, records, catalog, vision):
                 eligible = []
             elif preferred not in eligible:
                 preferred = max(eligible, key=lambda i: records[i]["score"], default=None)
+            selected = ({preferred, *answer["angles"]} & set(eligible)) if preferred is not None else set()
             # Other photos stay available in the private group until their gallery eligibility is checked.
             for entry in group["photos"]:
                 if entry["index"] not in eligible and closeup_label(records[entry["index"]], catalog):
                     entry["role"] = "label"
                 entry["cover"] = entry["index"] == preferred
-                if entry["role"] == "product" and entry["index"] != preferred:
+                if entry["role"] == "product" and entry["index"] not in selected:
                     entry["role"] = "accessory"
     return match_package_assets(store, groups, records, catalog)
 
