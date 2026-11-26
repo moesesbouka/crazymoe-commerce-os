@@ -1,0 +1,47 @@
+[
+  {
+    "model": "WBS13",
+    "identifiers": ["WBS13", "WITHINGS BODY SMART", "WBS13-BLACK-ALL", "3700546708190"],
+    "printed_brand": "Withings",
+    "printed_name": "Body Smart",
+    "printed_prefixes": ["BODY SMA", "BODY SMARE"],
+    "price_identifiers": ["WBS13-BLACK-ALL", "3700546708190"],
+    "price_variant": "Black",
+    "title": "Withings Body Smart Wi-Fi Scale",
+    "description": "Track weight and body composition with the Withings Body Smart scale. The color display gives a quick read at weigh-in, and the Withings app syncs measurements over Wi-Fi or Bluetooth.",
+    "specs": {"Model family": "WBS13", "Weight capacity": "440 lb", "Connectivity": "Wi-Fi and Bluetooth", "Power": "AAA batteries"},
+    "observations": [
+      {"model": "WBS13", "kind": "retail", "date": "2026-11-25", "cents": 10995, "currency": "USD", "available": true, "url": "https://www.withings.com/en-us/collections/scales"},
+      {"model": "WBS13", "kind": "retail", "date": "2026-11-25", "cents": 10995, "currency": "USD", "available": true, "url": "https://www.bestbuy.com/product/a/6541711"}
+    ]
+  },
+  {
+    "model": "PLAF109",
+    "identifiers": ["PLAF109", "PL AF109", "PETLIBRO POLAR"],
+    "title": "PETLIBRO Polar Smart Wet Food Feeder",
+    "description": "The PETLIBRO Polar schedules wet-food meals from the PETLIBRO app. The covered feeder has three meal compartments and a cooling system designed for wet food.",
+    "specs": {"Model family": "PLAF109", "Meal compartments": "3", "Connectivity": "2.4 GHz Wi-Fi", "Power": "Corded"}
+  },
+  {
+    "model": "BP9040",
+    "identifiers": ["BP9040", "BP 9040"],
+    "accessory_markers": ["WHAT OBSESSION"],
+    "title": "Definitive Technology BP9040 Tower Speaker with Powered Subwoofer",
+    "description": "The BP9040 is a floorstanding home theater speaker with front- and rear-firing drivers for a broad soundstage. An integrated 8-inch powered subwoofer and two passive radiators handle low frequencies.",
+    "specs": {"Model": "BP9040", "Design": "Bipolar floorstanding speaker", "Powered subwoofer": "8 in.", "Passive bass radiators": "2"}
+  },
+  {
+    "model": "MAX G2",
+    "identifiers": ["MAX G2", "MAXG2", "051501U", "051501E", "051501D"],
+    "title": "Segway Ninebot MAX G2 Folding Electric Scooter",
+    "description": "The Segway Ninebot MAX G2 commuter scooter has a folding stem, front and rear suspension, a wide standing deck, and a handlebar display.",
+    "specs": {"Model family": "MAX G2", "Design": "Folding electric kick scooter", "Suspension": "Front and rear"}
+  },
+  {
+    "model": "1E027-0024402",
+    "identifiers": ["1E027-0024402", "660845954854"],
+    "title": "Aventon Level.2 Step-Over Commuter E-Bike, Clay, Regular",
+    "description": "Aventon’s Level.2 step-over commuter e-bike in Clay, size Regular. It combines torque-sensing pedal assist with a 500 W rear hub motor, hydraulic disc brakes, and front suspension.",
+    "specs": {"Size": "Regular, 44 cm", "SKU": "1E027-0024402", "Motor": "500 W rear hub", "Battery rating": "48 V, 14 Ah", "Brakes": "Hydraulic disc"}
+  }
+]

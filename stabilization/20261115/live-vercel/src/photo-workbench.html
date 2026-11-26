@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Photo workbench · Crazy Moe Studio</title>
+  <link rel="stylesheet" href="/photo-workbench.css">
+  <script src="/photo-workbench-app.js" type="module"></script>
+</head>
+<body>
+  <aside class="rail" id="rail" hidden>
+    <a href="/" class="brand"><span>CM</span><div>CRAZY MOE <small>STUDIO</small></div></a>
+    <nav aria-label="Workspace">
+      <button data-view="upload" aria-current="page"><span>↥</span> Upload</button>
+      <button data-view="inventory"><span>▦</span> Inventory</button>
+      <button data-view="channels"><span>↗</span> Channels</button>
+      <a href="/">Listing Studio</a>
+      <button type="button" id="workbench-disconnect" hidden>Change connection</button>
+    </nav>
+  </aside>
+  <main id="workbench">
+    <section id="connect" class="connection" aria-labelledby="connect-title">
+      <h1 id="connect-title">Photo workbench</h1>
+      <p id="connect-status" role="status">Checking your Studio sign-in…</p>
+      <form id="connect-form" hidden>
+        <label>Private workbench address <input id="workbench-address" type="url" required autocomplete="off" spellcheck="false" placeholder="https://your-desktop.example.ts.net:8444"></label>
+        <button class="primary">Connect</button>
+      </form>
+      <a href="/">Back to Listing Studio</a>
+    </section>
+    <div id="workbench-content" hidden>
+    <header class="top"><div id="breadcrumb">Workspace / Upload</div><span class="pilot">Private drafts</span></header>
+    <p id="notice" role="status" hidden></p>
+    <section id="upload" class="surface">
+      <header class="hero"><div><h1>Photo workbench</h1><p>Upload photos of several products together and come back to review the drafts.</p></div><span class="hero-icon" aria-hidden="true">↥</span></header>
+      <div class="drop" id="drop">
+        <span class="drop-icon" aria-hidden="true">＋</span>
+        <h2>Add product photos</h2>
+        <p>Up to 100 photos per batch · 24 MB per photo</p>
+        <button class="primary" id="choose">Choose photos</button>
+        <input type="file" accept="image/*,.heic,.heif" id="photos" multiple hidden>
+        <p class="hint">A clear model-label photo helps identify each item.</p>
+      </div>
+      <div id="receipt" aria-live="polite"></div>
+      <section class="section"><h2>Recent batches</h2><div id="batches" class="batch-list"></div></section>
+    </section>
+    <section id="inventory" class="surface" hidden>
+      <header class="hero mini"><div><p class="eyebrow">BATCH REVIEW</p><h1>Your drafts.</h1><p>Review the cover, asking price, and any open questions.</p></div></header>
+      <div class="toolbar"><label>Batch <select id="batch-select"></select></label><label>Show <select id="filter"><option value="all">All items</option><option value="needs">Needs review</option><option value="ready">Ready</option><option value="approved">Approved</option></select></label></div>
+      <div id="counts" class="counts"></div><div id="cards" class="cards"></div>
+    </section>
+    <section id="channels" class="surface" hidden>
+      <header class="hero mini"><div><p class="eyebrow">MANUAL HANDOFF</p><h1>Take a draft to market.</h1><p>Download the approved copy and photos for each destination.</p></div></header>
+      <div class="toolbar"><label>Destination <select id="channel"><option value="storefront">Crazy Moe storefront</option><option value="facebook">Facebook Marketplace</option><option value="mercari">Mercari</option></select></label><a id="open-channel" target="_blank" rel="noopener noreferrer" hidden>Open listing page ↗</a></div>
+      <div id="eligible" class="cards"></div>
+    </section>
+    </div>
+  </main>
+  <dialog id="editor" aria-labelledby="edit-title">
+    <form id="edit-form">
+      <header class="editor-head"><div><p class="eyebrow">BUYER PREVIEW</p><h2 id="edit-title">Edit draft</h2></div><button type="button" class="quiet" id="close" aria-label="Close editor">×</button></header>
+      <div class="editor-body">
+        <section><div id="previews" class="previews"></div><div id="source-evidence"></div><div id="groups"></div></section>
+        <section class="fields"><label>Listing title <input name="title" maxlength="160" required></label>
+          <div class="split"><label>Asking price ($) <input name="price" type="number" min="0.01" step="0.01"></label>
+          <label>Condition <select name="condition"><option>New</option><option>Open box</option><option>Used</option><option>For parts</option></select></label></div>
+          <label>Buyer description <textarea name="description" rows="7" maxlength="4000" required></textarea></label>
+          <label class="check"><input name="condition_confirmed" type="checkbox"> Condition is accurate for this item</label>
+          <label class="check"><input name="group_confirmed" type="checkbox"> Product and photo grouping are correct</label>
+          <label class="check"><input name="photo_reviewed" type="checkbox"> Gallery shows the actual item and has no private labels</label>
+          <div id="edit-issues" class="issues"></div><p id="edit-notice" role="status"></p>
+        </section>
+      </div>
+      <footer class="editor-foot"><button type="button" id="approve">Approve saved draft</button><button class="primary" type="submit">Save draft</button></footer>
+    </form>
+  </dialog>
+  <template id="empty"><div class="empty"></div></template>
+</body>
+</html>
